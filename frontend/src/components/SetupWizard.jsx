@@ -2,13 +2,15 @@
 import { useEffect, useState } from 'react';
 import { apiSkills, skillK } from '../api.js';
 
-const FALLBACK_SKILLS = {
-  l_remodel: { name: '改造', desc: '获得 1 次 L 形墙放置权' },
+const FALLBACK_SKILLS = {  l_remodel: { name: '改造', desc: '获得 1 次 L 形墙放置权' },
   double_move: { name: '连续行动', desc: '本回合连续移动两次' },
   phase_walk: { name: '穿墙', desc: '下一次走子无视墙' },
   make_sand: { name: '流沙陷阱', desc: '将一个格变为流沙' },
   free_wall: { name: '免费墙', desc: '下一次放墙不消耗存量' },
 };
+
+// 参与者名字着色：含“红”用红色，其余保持默认高亮蓝
+const nameCls = (n) => (n && n.includes('红') ? 'hl-red' : 'hl');
 
 const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
@@ -32,7 +34,7 @@ function ColPicker({ m, goalA, goalB, k, phase, setPhase, onToggle, onRandom, on
   return (
     <div>
       <p className="muted">
-        出题人 <b className="hl">{chooserName}</b> 正在出题：A、B 各选 {k} 列，相互独立
+        出题人 <b className={nameCls(chooserName)}>{chooserName}</b> 正在出题：A、B 各选 {k} 列，相互独立
         （可以重叠，也可以留空列）。直接点列即可，选满一集后会自动切到另一集。
         A = 先手的获胜列，B = 后手的获胜列。
       </p>
@@ -211,7 +213,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
 
       {step === 1 && (
         <div>
-          <p>本局棋盘 <b>{fn}×{fm}</b>（k = m//2 = {k}），出题人是 <b className="hl">{names[chooser]}</b>
+          <p>本局棋盘 <b>{fn}×{fm}</b>（k = m//2 = {k}），出题人是 <b className={nameCls(names[chooser])}>{names[chooser]}</b>
             （{ptypes[chooser] === 'human' ? '人类出题' : 'AI 出题'}），应战人是 <b>{names[picker]}</b>。</p>
           {ptypes[chooser] === 'human' ? (
             <ColPicker m={fm} goalA={goalA} goalB={goalB} k={k} phase={phase} setPhase={setPhase}
@@ -238,7 +240,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
 
       {step === 2 && (
         <div>
-          <p>应战人 <b className="hl">{names[picker]}</b> 请选择：</p>
+          <p>应战人 <b className={nameCls(names[picker])}>{names[picker]}</b> 请选择：</p>
           <div className="sidecards">
             <button className={`sidecard${side === 'first' ? ' sel' : ''}`} onClick={() => ptypes[picker] === 'human' && setSide('first')}>
               <b>先手 + 集合 A</b>
