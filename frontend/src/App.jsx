@@ -1,228 +1,285 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import Board from './components/Board.jsx';
+import SetupWizard from './components/SetupWizard.jsx';
+import { apiAiMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall, wallLocalLegal } from './api.js';
 
-const API = '';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// 新开对局
-async function apiNew(n, m, seed) {
-  const r = await fetch(`${API}/api/games/new`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ n, m, seed }),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+// 历史记录中文格式化
+function fmtHist(h, seatNames) {
+  const who = `${seatNames[h.player]}(${h.player === 0 ? '先手' : '后手'})`;
+  if (h.type === 'move') return `${who} 走子 → (${h.to[0]}, ${h.to[1]})`;
+  if (h.type === 'wall') {
+    const w = h.wall;
+    const kind = w.kind === 'L' ? `L 墙 ${w.arm}` : w.orientation === 'H' ? '横墙' : '竖墙';
+    return `${who} 放${kind} @ (${w.wr}, ${w.wc})`;
+  }
+  if (h.type === 'quicksand') return `${who} 踩中流沙，对方连续行动两次`;
+  return JSON.stringify(h);
 }
 
 export default function App() {
+  const [wizardOpen, setWizardOpen] = useState(true);
   const [gid, setGid] = useState(null);
-  const [state, setState] = useState(null);
-  const [snaps, setSnaps] = useState([]); // 快照数组，用于回放
+  const [state, setState] = useState(null); // 最新状态（权威）
+  const [snaps, setSnaps] = useState([]); // 快照，用于回放
   const [step, setStep] = useState(0);
-  const [n, setN] = useState('');
-  const [m, setM] = useState('');
-  const [seed, setSeed] = useState('');
-  const [players, setPlayers] = useState(['human', 'human']); // 每方 human/ai
   const [legal, setLegal] = useState([]);
-  const [wallForm, setWallForm] = useState({ kind: 'straight', orientation: 'H', wr: 1, wc: 0, arm: 'NW' });
+  const [mode, setMode] = useState('move');
+  const [wallSel, setWallSel] = useState({ kind: 'straight', orientation: 'H', arm: 'NW' });
+  const [ghost, setGhost] = useState(null);
+  const [seatNames, setSeatNames] = useState(['先手', '后手']);
+  const [seatTypes, setSeatTypes] = useState(['human', 'human']);
+  const [autoAI, setAutoAI] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const shown = snaps.length ? snaps[step] : state;
+  // refs 供 AI 走到底循环读取最新值
+  const stateRef = useRef(state); stateRef.current = state;
+  const typesRef = useRef(seatTypes); typesRef.current = seatTypes;
+  const gidRef = useRef(gid); gidRef.current = gid;
+  const autoRef = useRef(false);
+
+  const shown = snaps.length ? snaps[Math.min(step, snaps.length - 1)] : null;
+  const isReplay = snaps.length > 0 && step < snaps.length - 1;
+  const live = gid && state && state.winner == null && !isReplay;
+
+  // 墙所属方（按 history 中放墙顺序对应 walls 数组）
+  const wallOwners = (() => {
+    if (!shown) return [];
+    const owners = [];
+    for (const h of shown.history || []) if (h.type === 'wall') owners.push(h.player);
+    return owners;
+  })();
 
   async function refreshLegal(g, st) {
-    const r = await fetch(`${API}/api/games/${g}/legal-moves?player=${st.turn}`);
-    const j = await r.json();
-    setLegal(j.moves || []);
+    try { setLegal(await apiLegal(g, st.turn)); } catch { setLegal([]); }
   }
 
-  function pushSnap(st) {
-    setSnaps((s) => [...s, st]);
-    setStep((s) => s + 0); // 保持指向最新稍后处理
+  function appendSnap(st) {
+    setSnaps((prev) => [...prev, st]);
+    setStep(snaps.length); // snaps 为追加前数组，其长度即新末尾下标
+    setState(st);
+    setGhost(null);
+    refreshLegal(gidRef.current, st);
   }
 
-  async function newGame() {
-    const j = await apiNew(
-      n === '' ? null : Number(n), m === '' ? null : Number(m),
-      seed === '' ? null : Number(seed),
-    );
-    setGid(j.id);
-    setState(j.state);
-    setSnaps([j.state]);
-    setStep(0);
-    refreshLegal(j.id, j.state);
+  async function createGame(cfg) {
+    setBusy(true);
+    try {
+      const j = await apiNew({ n: cfg.n, m: cfg.m, seed: cfg.seed, goal_A: cfg.goal_A, goal_B: cfg.goal_B });
+      const names = [cfg.participants[cfg.seatOf[0]].name, cfg.participants[cfg.seatOf[1]].name];
+      const types = [cfg.participants[cfg.seatOf[0]].type, cfg.participants[cfg.seatOf[1]].type];
+      setGid(j.id);
+      setSeatNames(names);
+      setSeatTypes(types);
+      setSnaps([j.state]);
+      setStep(0);
+      setState(j.state);
+      setMode('move');
+      setWizardOpen(false);
+      refreshLegal(j.id, j.state);
+    } catch (e) { alert(`开局失败：${e.message}`); } finally { setBusy(false); }
   }
 
-  async function doMove(to) {
-    const r = await fetch(`${API}/api/games/${gid}/moves/pawn`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to }),
-    });
-    if (!r.ok) { alert(await r.text()); return; }
-    const j = await r.json();
-    setState(j.state);
-    setSnaps((s) => [...s, j.state]);
-    setStep(snaps.length); // 指向最新
-    refreshLegal(gid, j.state);
+  async function doMove(r, c) {
+    if (!live) return;
+    setBusy(true);
+    try { appendSnap((await apiMovePawn(gid, [r, c])).state); }
+    catch (e) { alert(e.message); } finally { setBusy(false); }
   }
 
-  async function doWall() {
-    const body = {
-      kind: wallForm.kind, wr: Number(wallForm.wr), wc: Number(wallForm.wc),
-      orientation: wallForm.kind === 'straight' ? wallForm.orientation : null,
-      arm: wallForm.kind === 'L' ? wallForm.arm : null,
-    };
-    const r = await fetch(`${API}/api/games/${gid}/moves/wall`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) { alert(await r.text()); return; }
-    const j = await r.json();
-    setState(j.state);
-    setSnaps((s) => [...s, j.state]);
-    setStep(snaps.length);
-    refreshLegal(gid, j.state);
+  async function doPlaceWall(wall) {
+    if (!live) return;
+    const chk = wallLocalLegal(state, state.turn, wall);
+    if (!chk.ok) { alert(`此处不可放墙：${chk.reason}`); return; }
+    setBusy(true);
+    try {
+      appendSnap((await apiPlaceWall(gid, {
+        kind: wall.kind, wr: wall.wr, wc: wall.wc,
+        orientation: wall.kind === 'straight' ? wall.orientation : null,
+        arm: wall.kind === 'L' ? wall.arm : null,
+      })).state);
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  async function aiOnce(g) {
+    const j = await apiAiMove(g ?? gidRef.current);
+    appendSnap(j.state);
+    return j.state;
   }
 
   async function aiMove() {
-    const r = await fetch(`${API}/api/games/${gid}/ai-move`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    if (!r.ok) { alert(await r.text()); return; }
-    const j = await r.json();
-    setState(j.state);
-    setSnaps((s) => [...s, j.state]);
-    setStep(snaps.length);
-    refreshLegal(gid, j.state);
+    if (!live || busy) return;
+    setBusy(true);
+    try { await aiOnce(); } catch (e) { alert(e.message); } finally { setBusy(false); }
   }
 
-  // 导出 json 棋谱（含快照以便回放）
+  async function aiToEnd() {
+    if (autoRef.current) { autoRef.current = false; return; }
+    autoRef.current = true;
+    setAutoAI(true);
+    try {
+      for (let i = 0; i < 500 && autoRef.current; i++) {
+        const s = stateRef.current;
+        if (!s || s.winner != null) break;
+        if (typesRef.current[s.turn] !== 'ai') break;
+        if (!gidRef.current) break;
+        try { await aiOnce(); } catch (e) { alert(e.message); break; }
+        await sleep(350);
+      }
+    } finally { autoRef.current = false; setAutoAI(false); }
+  }
+
   function exportKifu() {
-    const blob = new Blob([JSON.stringify({ state, snaps }, null, 2)], { type: 'application/json' });
+    if (!state) return;
+    const blob = new Blob([JSON.stringify({ state, snaps, meta: { seatNames, seatTypes } }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `kifu_${gid}.json`;
+    a.download = `kifu_${gid ?? 'local'}.json`;
     a.click();
   }
 
-  // 由文件导入棋谱并查看回放
   async function importKifu(e) {
     const f = e.target.files[0];
     if (!f) return;
-    const j = JSON.parse(await f.text());
-    if (j.snaps) {
-      setSnaps(j.snaps);
-      setStep(0);
-      setState(j.snaps[j.snaps.length - 1]);
-      setGid(null);
-    } else {
-      // 纯后端棋谱：恢复为对局
-      const r = await fetch(`${API}/api/games/import`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(j.state || j),
-      });
-      const out = await r.json();
-      setGid(out.id);
-      setState(out.state);
-      setSnaps([out.state]);
-      setStep(0);
-      refreshLegal(out.id, out.state);
-    }
+    try {
+      const j = JSON.parse(await f.text());
+      if (j.snaps) {
+        setSnaps(j.snaps);
+        setStep(0);
+        setState(j.snaps[j.snaps.length - 1]);
+        if (j.meta) { setSeatNames(j.meta.seatNames); setSeatTypes(j.meta.seatTypes); }
+        setGid(null);
+        setWizardOpen(false);
+      } else {
+        const out = await apiImport(j.state || j);
+        setGid(out.id);
+        setState(out.state);
+        setSnaps([out.state]);
+        setStep(0);
+        setWizardOpen(false);
+        refreshLegal(out.id, out.state);
+      }
+    } catch (err) { alert(`导入失败：${err.message}`); }
+    e.target.value = '';
   }
 
-  function cellClass(r, c) {
-    if (!shown) return 'cell';
-    const dead = shown.deads.some(([x, y]) => x === r && y === c);
-    const sand = shown.sands.some(([x, y]) => x === r && y === c);
-    let cls = 'cell';
-    if (dead) cls += ' dead';
-    if (sand) cls += ' sand';
-    if (shown.n && r === shown.n - 1 && shown.goal_A.includes(c)) cls += ' goalA';
-    if (shown.n && r === 0 && shown.goal_B.includes(c)) cls += ' goalB';
-    if (legal.some(([x, y]) => x === r && y === c) && snaps.length && step === snaps.length - 1) cls += ' legal';
-    return cls;
-  }
-
-  function cellText(r, c) {
-    if (!shown) return '';
-    if (shown.deads.some(([x, y]) => x === r && y === c)) return '✕';
-    let t = '';
-    if (shown.sands.some(([x, y]) => x === r && y === c)) t += '~';
-    if (shown.pawns[0][0] === r && shown.pawns[0][1] === c) t += '●'; // 先手
-    if (shown.pawns[1][0] === r && shown.pawns[1][1] === c) t += '○'; // 后手
-    return t;
-  }
-
-  const isReplay = snaps.length > 0 && step < snaps.length - 1;
+  const turnIsAI = state && seatTypes[state.turn] === 'ai';
 
   return (
     <div className="app">
-      <h2>Quoridor 改版（React + FastAPI）</h2>
-      <div className="panel">
-        <label>行 n <input value={n} onChange={(e) => setN(e.target.value)} placeholder="空=随机9~15" size={8} /></label>
-        <label>列 m <input value={m} onChange={(e) => setM(e.target.value)} placeholder="空=随机9~15" size={8} /></label>
-        <label>种子 <input value={seed} onChange={(e) => setSeed(e.target.value)} placeholder="可选" size={8} /></label>
-        <label>先手 <select value={players[0]} onChange={(e) => setPlayers([e.target.value, players[1]])}>
-          <option value="human">人类</option><option value="ai">AI(随机示例)</option>
-        </select></label>
-        <label>后手 <select value={players[1]} onChange={(e) => setPlayers([players[0], e.target.value])}>
-          <option value="human">人类</option><option value="ai">AI(随机示例)</option>
-        </select></label>
-        <button onClick={newGame}>新对局</button>
-        <span style={{ marginLeft: 8 }}>●=先手（目标底行绿框A） ○=后手（目标顶行蓝框B） ✕=死点 ~=流沙</span>
-      </div>
+      <header className="topbar">
+        <div className="brand"><span className="logo">♞</span> Quoridor 改版</div>
+        <div className="topactions">
+          <button className="btn ghost" onClick={() => setWizardOpen(true)}>新对局</button>
+          <button className="btn ghost" onClick={exportKifu} disabled={!state}>导出棋谱</button>
+          <label className="btn ghost filebtn">导入/回放<input type="file" accept=".json" onChange={importKifu} hidden /></label>
+        </div>
+      </header>
 
-      {shown && (
-        <div className="panel">
-          <div>轮到：{shown.turn === 0 ? '先手 ●' : '后手 ○'}（{players[shown.turn] === 'ai' ? 'AI' : '人类'}）
-            剩余墙：先手 {shown.walls_left[0]} / 后手 {shown.walls_left[1]}
-            {shown.winner != null && <b style={{ color: 'red' }}> 胜者：{shown.winner === 0 ? '先手' : '后手'}（{shown.win_reason}）</b>}
-            {shown.bonus_moves > 0 && <span>（流沙：同一人继续行动）</span>}
-            {isReplay && <span style={{ color: '#888' }}>（回放中，非最新）</span>}
-          </div>
-          <div className="board" style={{ marginTop: 8 }}>
-            {Array.from({ length: shown.n }, (_, r) => (
-              <div className="row" key={r}>
-                {Array.from({ length: shown.m }, (_, c) => (
-                  <div key={c} className={cellClass(r, c)}
-                    onClick={() => { if (!isReplay && gid) doMove([r, c]); }}>
-                    {cellText(r, c)}
+      {wizardOpen && (
+        <SetupWizard onCreate={createGame} onCancel={() => setWizardOpen(false)} hasGame={!!state} />
+      )}
+
+      {shown && !wizardOpen && (
+        <div className="main">
+          <section className="card boardcard">
+            <div className="statusbar">
+              <span className={`turnbadge p${shown.turn}`}>
+                轮到 {seatNames[shown.turn]}（{shown.turn === 0 ? '先手●' : '后手○'}）
+              </span>
+              {shown.bonus_moves > 0 && <span className="pill warn">流沙：同一人继续行动</span>}
+              {isReplay && <span className="pill">回放中 {step + 1}/{snaps.length}</span>}
+              {shown.winner != null && (
+                <span className="pill win">胜者：{seatNames[shown.winner]}（{shown.win_reason}）</span>
+              )}
+            </div>
+            <div className="wallsline">
+              <span className="wcount p0">● 墙 {shown.walls_left[0]}（L 已用 {shown.l_used[0]}/{shown.l_wall_quota}）</span>
+              <span className="wcount p1">○ 墙 {shown.walls_left[1]}（L 已用 {shown.l_used[1]}/{shown.l_wall_quota}）</span>
+              <span className="muted small">A=[{shown.goal_A.join(',')}] → 先手底线绿标　B=[{shown.goal_B.join(',')}] → 后手顶线蓝标</span>
+            </div>
+            <Board st={shown} legal={live && mode === 'move' ? legal : []}
+              mode={mode} wallSel={wallSel} ghost={ghost} wallOwners={wallOwners}
+              interactive={!!live}
+              onCellClick={(r, c) => doMove(r, c)}
+              onSlotHover={(w) => setGhost({ wall: w, ...wallLocalLegal(state, state.turn, w) })}
+              onSlotLeave={() => setGhost(null)}
+              onSlotClick={(w) => doPlaceWall(w)} />
+            <div className="legend">
+              <span><i className="sw death" />死点不可进</span>
+              <span><i className="sw sand" />流沙：对方连走两次</span>
+              <span><i className="sw ga" />先手目标</span>
+              <span><i className="sw gb" />后手目标</span>
+            </div>
+          </section>
+
+          <aside className="side">
+            <div className="card">
+              <h3>行动</h3>
+              <div className="seg">
+                {['move', 'wall'].map((v) => (
+                  <button key={v} className={`segbtn${mode === v ? ' active' : ''}`}
+                    onClick={() => { setMode(v); setGhost(null); }}>
+                    {v === 'move' ? '走子' : '放墙'}
+                  </button>
+                ))}
+              </div>
+              {mode === 'wall' && (
+                <div>
+                  <div className="seg">
+                    <button className={`segbtn${wallSel.kind === 'straight' && wallSel.orientation === 'H' ? ' active' : ''}`}
+                      onClick={() => setWallSel({ ...wallSel, kind: 'straight', orientation: 'H' })}>横墙</button>
+                    <button className={`segbtn${wallSel.kind === 'straight' && wallSel.orientation === 'V' ? ' active' : ''}`}
+                      onClick={() => setWallSel({ ...wallSel, kind: 'straight', orientation: 'V' })}>竖墙</button>
+                    <button className={`segbtn${wallSel.kind === 'L' ? ' active' : ''}`}
+                      onClick={() => setWallSel({ ...wallSel, kind: 'L' })}>L 墙</button>
+                  </div>
+                  {wallSel.kind === 'L' && (
+                    <div className="seg">
+                      {['NW', 'NE', 'SW', 'SE'].map((a) => (
+                        <button key={a} className={`segbtn${wallSel.arm === a ? ' active' : ''}`}
+                          onClick={() => setWallSel({ ...wallSel, arm: a })}>{a}</button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="muted small">把鼠标移到棋盘间隙上预览，绿色可放、红色非法，点击落子。</p>
+                </div>
+              )}
+              <div className="rowbtns">
+                <button className={`btn${turnIsAI ? ' primary' : ' ghost'}`} disabled={!live || busy} onClick={aiMove}>
+                  AI 行棋{turnIsAI ? '（轮到 AI）' : ''}
+                </button>
+                <button className="btn ghost" disabled={!live || busy} onClick={aiToEnd}>
+                  {autoAI ? '停止连走' : 'AI 走到底'}
+                </button>
+              </div>
+            </div>
+
+            {snaps.length > 1 && (
+              <div className="card">
+                <h3>回放</h3>
+                <input type="range" className="slider" min={0} max={snaps.length - 1} value={step}
+                  onChange={(e) => setStep(Number(e.target.value))} />
+                <div className="muted small">{step + 1} / {snaps.length} 步{isReplay ? '（点击棋盘已锁定，拖到末尾继续）' : ''}</div>
+              </div>
+            )}
+
+            <div className="card">
+              <h3>棋谱（{shown.history?.length ?? 0} 手）</h3>
+              <div className="history">
+                {(shown.history || []).map((h, i) => (
+                  <div key={i} className={i === (shown.history.length - 1) ? 'hl' : ''}>
+                    {i + 1}. {fmtHist(h, seatNames)}
                   </div>
                 ))}
               </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <button disabled={!gid || isReplay} onClick={aiMove}>AI 走一步（随机示例）</button>
-            <button disabled={!gid || isReplay} onClick={doWall}>放墙</button>
-            <select value={wallForm.kind} onChange={(e) => setWallForm({ ...wallForm, kind: e.target.value })}>
-              <option value="straight">直墙</option><option value="L">L墙</option>
-            </select>
-            {wallForm.kind === 'straight' ? (
-              <select value={wallForm.orientation} onChange={(e) => setWallForm({ ...wallForm, orientation: e.target.value })}>
-                <option value="H">横</option><option value="V">竖</option>
-              </select>
-            ) : (
-              <select value={wallForm.arm} onChange={(e) => setWallForm({ ...wallForm, arm: e.target.value })}>
-                <option>NW</option><option>NE</option><option>SW</option><option>SE</option>
-              </select>
-            )}
-            <label>wr <input value={wallForm.wr} size={3} onChange={(e) => setWallForm({ ...wallForm, wr: e.target.value })} /></label>
-            <label>wc <input value={wallForm.wc} size={3} onChange={(e) => setWallForm({ ...wallForm, wc: e.target.value })} /></label>
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <button onClick={exportKifu}>导出棋谱 json</button>
-            <label>导入/回放 <input type="file" accept=".json" onChange={importKifu} /></label>
-          </div>
-          {snaps.length > 1 && (
-            <div style={{ marginTop: 8 }}>
-              回放：<input type="range" min={0} max={snaps.length - 1} value={step}
-                onChange={(e) => setStep(Number(e.target.value))} />
-              {step + 1}/{snaps.length}
             </div>
-          )}
-          <div className="history">
-            {(shown.history || []).map((h, i) => <div key={i}>{i}: {JSON.stringify(h)}</div>)}
-          </div>
+          </aside>
         </div>
       )}
+
+      {!shown && !wizardOpen && <p className="muted">点击「新对局」开始。</p>}
     </div>
   );
 }

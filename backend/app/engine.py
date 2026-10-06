@@ -4,7 +4,7 @@
 - 棋盘为 n 行 × m 列，格子坐标 (r, c)，r∈[0,n), c∈[0,m)。
 - 先手出生在顶行 (0, m//2)，后手出生在底行 (n-1, m//2)。
 - 先手目标：底行 (n-1, c)，c∈A；后手目标：顶行 (0, c)，c∈B。
-  A、B 为列集合，互不相交，大小均为 m//2。
+  A、B 为列集合，各自大小均为 floor(m/2)，相互独立（可相交、可留空列）。
 - 墙分为直墙（长 2）和 L 墙（1+1 直角，总长 2）。
 """
 
@@ -124,12 +124,10 @@ def wall_count(n: int, m: int) -> int:
 
 
 def pick_goal_sets(m: int, rng: random.Random) -> tuple[list[int], list[int]]:
-    """随机选两个不交叠、各大小 floor(m/2) 的列集合 A、B。"""
+    """随机选两个各大小 floor(m/2) 的列集合 A、B（相互独立，可相交）。"""
     k = m // 2
-    cols = list(range(m))
-    rng.shuffle(cols)
-    a = sorted(cols[:k])
-    b = sorted(cols[k : 2 * k])
+    a = sorted(rng.sample(range(m), k))
+    b = sorted(rng.sample(range(m), k))
     return a, b
 
 
@@ -229,14 +227,29 @@ def wall_edges(w: Wall) -> set[tuple[int, int, int, int]]:
     return s
 
 
+def validate_goal_sets(m: int, goal_A: list[int], goal_B: list[int]) -> tuple[list[int], list[int]]:
+    """校验人类指定的 A/B 列集合：各大小 floor(m/2)，范围内，内部无重复（A、B 间可相交）。"""
+    k = m // 2
+    a, b = sorted(goal_A), sorted(goal_B)
+    if len(a) != k or len(b) != k:
+        raise ValueError(f"A、B 大小必须各为 m//2={k}")
+    if any(not isinstance(c, int) or not 0 <= c < m for c in a + b):
+        raise ValueError(f"获胜列必须在 [0,{m}) 内")
+    if len(set(a)) != k or len(set(b)) != k:
+        raise ValueError("A、B 内部不能有重复列")
+    return a, b
+
+
 def new_game(
     n: int | None = None,
     m: int | None = None,
     seed: int | None = None,
     dead_ratio: float = 0.04,
     sand_ratio: float = 0.04,
+    goal_A: list[int] | None = None,
+    goal_B: list[int] | None = None,
 ) -> GameState:
-    """随机开局：n,m∈[9,15]，死点/流沙各约 4%，保连通，目标 A/B 随机。"""
+    """随机开局：n,m∈[9,15]，死点/流沙各约 4%，保连通；A/B 可手动指定或随机。"""
     rng = random.Random(seed)
     n = n or rng.randint(9, 15)
     m = m or rng.randint(9, 15)
@@ -246,7 +259,12 @@ def new_game(
     quota = v // 3
     start0 = [0, m // 2]
     start1 = [n - 1, m // 2]
-    goal_A, goal_B = pick_goal_sets(m, rng)
+    if goal_A is None and goal_B is None:
+        goal_A, goal_B = pick_goal_sets(m, rng)
+    elif goal_A is None or goal_B is None:
+        raise ValueError("A、B 必须同时指定或同时留空")
+    else:
+        goal_A, goal_B = validate_goal_sets(m, list(goal_A), list(goal_B))
 
     # 出生点与其周围一圈、双方底线行不受死点/流沙影响
     protected = {tuple(start0), tuple(start1)}

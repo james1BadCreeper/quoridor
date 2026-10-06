@@ -38,8 +38,8 @@ npm run dev   # 访问 http://127.0.0.1:5173（/api 已代理到 8000 端口）
 ## 实现现状（MVP）
 
 - 后端 `backend/app/engine.py`：随机地图、直墙/L 墙（1+1 直角）、A/B 获胜列集、死点/流沙、流沙罚步、无路径即被围判胜。
-- 接口：开局 `/api/games/new`、走子/放墙、合法走子查询、随机示例 AI（`/api/games/{id}/ai-move`）、棋谱导出/导入。
-- 前端：本地双人 / 人机混战 / AI 演示、放墙表单、棋谱 json 导出导入、快照回放条。
+- 接口：开局 `/api/games/new`（支持人类指定 A/B 列集）、走子/放墙、合法走子查询、随机示例 AI（`/api/games/{id}/ai-move`）、棋谱导出/导入。
+- 前端：深色现代 UI（SVG 棋盘：墙体着色绘制、悬停预览、点击间隙放墙）；开局向导完整还原规则 2（随机出题人 → 人类点选/AI 随机出 A/B → 对方选“先手 + A / 后手 + B”）；本地双人 / 人机混战 / AI 走到底演示、棋谱 json 导出导入、快照回放条。
 - AI：Python 随机基线（`random_ai_move`）+ C++ 单文件示例与协议说明（`backend/app/ai_cpp_example/README.md`）。
 
 ## AI 编写指南

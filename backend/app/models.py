@@ -17,6 +17,8 @@ class NewGameRequest(BaseModel):
     n: int | None = Field(default=None, description="行数，不填则 9~15 随机")
     m: int | None = Field(default=None, description="列数，不填则 9~15 随机")
     seed: int | None = None
+    goal_A: list[int] | None = Field(default=None, description="人类指定的 A 列集合，不填则随机")
+    goal_B: list[int] | None = Field(default=None, description="人类指定的 B 列集合，不填则随机")
 
 
 class PawnMoveRequest(BaseModel):

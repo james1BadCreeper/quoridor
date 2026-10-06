@@ -15,13 +15,34 @@ def test_new_game_paths_exist():
     assert st.walls_total == (10 * 10) // 10 == 10
     assert st.l_wall_quota == 10 // 3 == 3
     assert len(st.goal_A) == 4 and len(st.goal_B) == 4
-    assert set(st.goal_A).isdisjoint(st.goal_B)
     assert len(legal_pawn_moves(st, 0)) > 0
+
+
+def test_goal_sets_may_overlap():
+    # B 不必是 A 的补集：相交、留空列都合法
+    st = new_game(n=9, m=9, seed=1, goal_A=[0, 1, 2, 3], goal_B=[3, 4, 5, 6])
+    assert st.goal_A == [0, 1, 2, 3] and st.goal_B == [3, 4, 5, 6]
 
 
 def test_wall_count_formula():
     st = new_game(n=15, m=15, seed=2)
     assert st.walls_total == (16 * 16) // 10
+
+
+def test_new_game_manual_goals():
+    st = new_game(n=9, m=10, seed=1, goal_A=[0, 1, 2, 3, 4], goal_B=[5, 6, 7, 8, 9])
+    assert st.goal_A == [0, 1, 2, 3, 4] and st.goal_B == [5, 6, 7, 8, 9]
+
+
+def test_new_game_bad_goals_rejected():
+    import pytest
+
+    with pytest.raises(ValueError):
+        new_game(n=9, m=9, seed=1, goal_A=[0, 1], goal_B=[2, 3])  # 大小不对
+    with pytest.raises(ValueError):
+        new_game(n=9, m=9, seed=1, goal_A=[0, 1, 2, 2], goal_B=[4, 5, 6, 7])  # A 内部重复
+    with pytest.raises(ValueError):
+        new_game(n=9, m=9, seed=1, goal_A=[0, 1, 2, 3], goal_B=None)  # 只给一边
 
 
 def test_quicksand_grants_double_move():
