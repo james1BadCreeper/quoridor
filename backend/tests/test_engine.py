@@ -253,6 +253,64 @@ def test_make_sand_restrictions():
         play_skill(st, "make_sand", target)  # 同一序列第二张被拒
 
 
+def test_straight_jump():
+    st = GameState(n=9, m=9, walls_total=10, pawns=[[4, 4], [4, 5]],
+                   walls_left=[10, 10], goal_A=[0], goal_B=[8])
+    moves = legal_pawn_moves(st, 0)
+    assert [4, 6] in moves  # 直线跳过
+    assert [4, 5] not in moves  # 对方所在格不可停留
+
+
+def test_jump_blocked_by_wall_gives_diagonals():
+    st = GameState(n=9, m=9, walls_total=10, pawns=[[4, 4], [4, 5]],
+                   walls_left=[10, 10], goal_A=[0], goal_B=[8])
+    st.walls.append(Wall(wr=4, wc=6, orientation="V"))  # 封住 (4,5)-(4,6)
+    moves = legal_pawn_moves(st, 0)
+    assert [4, 6] not in moves
+    assert [3, 5] in moves and [5, 5] in moves  # 两侧斜格
+
+
+def test_jump_at_board_edge_gives_diagonals():
+    st = GameState(n=9, m=9, walls_total=10, pawns=[[7, 4], [8, 4]],
+                   walls_left=[10, 10], goal_A=[0], goal_B=[8])
+    moves = legal_pawn_moves(st, 0)
+    assert [8, 3] in moves and [8, 5] in moves
+
+
+def test_jump_dead_landing_gives_diagonals():
+    st = GameState(n=9, m=9, walls_total=10, pawns=[[4, 4], [4, 5]],
+                   walls_left=[10, 10], goal_A=[0], goal_B=[8],
+                   deads={(4, 6)})
+    moves = legal_pawn_moves(st, 0)
+    assert [4, 6] not in moves
+    assert [3, 5] in moves and [5, 5] in moves
+
+
+def test_jump_onto_goal_wins():
+    st = GameState(n=9, m=9, walls_total=10, pawns=[[6, 2], [7, 2]],
+                   walls_left=[10, 10], goal_A=[2], goal_B=[8])
+    apply_pawn_move(st, [8, 2])  # 跳过对方直达获胜点
+    assert st.winner == 0
+
+
+def test_jump_onto_sand_triggers_quicksand():
+    st = GameState(n=9, m=9, walls_total=10, pawns=[[4, 4], [4, 5]],
+                   walls_left=[10, 10], goal_A=[0], goal_B=[8],
+                   sands={(4, 6)})
+    apply_pawn_move(st, [4, 6])  # 跳进流沙
+    assert st.turn == 1 and st.bonus_moves == 1
+
+
+def test_phase_walk_jumps_through_wall():
+    st = GameState(n=9, m=9, walls_total=10, pawns=[[4, 4], [4, 5]],
+                   walls_left=[10, 10], goal_A=[0], goal_B=[8],
+                   phase_buff=[True, False])
+    st.walls.append(Wall(wr=4, wc=6, orientation="V"))  # 封住 (4,5)-(4,6)
+    assert [4, 6] in legal_pawn_moves(st, 0, ignore_walls=True)
+    apply_pawn_move(st, [4, 6])
+    assert st.pawns[0] == [4, 6] and not st.phase_buff[0]
+
+
 def test_surround_wins_for_victim():
     st = GameState(
         n=9, m=9, walls_total=10,

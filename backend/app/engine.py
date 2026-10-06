@@ -195,15 +195,7 @@ def _has_path(state: GameState, player: int) -> bool:
     dq = deque([(sr, sc)])
     while dq:
         r, c = dq.popleft()
-        for nr, nc in [ (r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1) ]:
-            if not (0 <= nr < state.n and 0 <= nc < state.m):
-                continue
-            if (nr, nc) in state.deads:
-                continue
-            if [nr, nc] == opp:
-                continue  # 简化规则：不能进入对方格，无跳子
-            if (r, c, nr, nc) in blocked:
-                continue
+        for nr, nc in _step_neighbors(state, r, c, player, blocked):
             if (nr, nc) in seen:
                 continue
             if (nr, nc) in goals:
@@ -355,23 +347,57 @@ def new_game(
 
 # ---------------- 合法动作 ----------------
 
-def legal_pawn_moves(state: GameState, player: int, ignore_walls: bool = False) -> list[list[int]]:
-    """正交一步：不出界、不进死点/对方格、不穿墙（穿墙 buff 下无视墙）。"""
-    blocked = set() if ignore_walls else build_blocked_edges(state)
-    r, c = state.pawns[player]
+def _step_neighbors(
+    state: GameState, r: int, c: int, player: int,
+    blocked: set[tuple[int, int, int, int]],
+) -> list[list[int]]:
+    """从 (r, c) 出发的单步可达格（含跳子规则）。
+
+    标准跳子：邻格为对方棋子时，直线跳过；直线落点被挡（出界/死点/墙）时，
+    改走对方棋子两侧的斜格。对方所在格本身不可停留。
+    """
     opp = state.pawns[1 - player]
-    out = []
-    for nr, nc in [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)]:
+    out: list[list[int]] = []
+    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+        nr, nc = r + dr, c + dc
         if not (0 <= nr < state.n and 0 <= nc < state.m):
             continue
         if (nr, nc) in state.deads:
             continue
-        if [nr, nc] == opp:
-            continue
         if (r, c, nr, nc) in blocked:
             continue
-        out.append([nr, nc])
+        if [nr, nc] != opp:
+            out.append([nr, nc])
+            continue
+        # 跳子：直线落点
+        br, bc = nr + dr, nc + dc
+        straight_ok = (
+            0 <= br < state.n and 0 <= bc < state.m
+            and (br, bc) not in state.deads
+            and (nr, nc, br, bc) not in blocked
+        )
+        if straight_ok:
+            out.append([br, bc])
+        else:
+            # 直线被挡：对方棋子两侧斜格（检查对方格→斜格的墙）
+            for sdr, sdc in ((dc, dr), (-dc, -dr)):
+                tr, tc = nr + sdr, nc + sdc
+                if not (0 <= tr < state.n and 0 <= tc < state.m):
+                    continue
+                if (tr, tc) in state.deads:
+                    continue
+                if (nr, nc, tr, tc) in blocked:
+                    continue
+                if [tr, tc] not in out:
+                    out.append([tr, tc])
     return out
+
+
+def legal_pawn_moves(state: GameState, player: int, ignore_walls: bool = False) -> list[list[int]]:
+    """合法走子：正交一步 + 跳子（穿墙 buff 下无视墙，仍不能进死点/对方格）。"""
+    blocked = set() if ignore_walls else build_blocked_edges(state)
+    r, c = state.pawns[player]
+    return _step_neighbors(state, r, c, player, blocked)
 
 
 def _wall_in_bounds(state: GameState, w: Wall) -> bool:
