@@ -4,8 +4,7 @@
 //         deads, sands, goal_A, goal_B, turn 等）。
 //   输出（一行 json）：
 //     走子：{"type":"move","to":[r,c]}
-//     放直墙：{"type":"wall","wall":{"kind":"straight","wr":..,"wc":..,"orientation":"H"}} 
-//     放L墙：{"type":"wall","wall":{"kind":"L","wr":..,"wc":..,"arm":"NW"}}
+//     放墙：{"type":"wall","wall":{"wr":..,"wc":..,"orientation":"H"}}（H 横墙 / V 竖墙）
 // 打包：把本文件及依赖打成 .zip 上传即可。本示例为随机策略，仅演示协议。
 //
 // 编译运行示例：
@@ -54,7 +53,7 @@ int main() {
         cout << "{\"type\":\"move\",\"to\":[" << r << "," << c << "]}";
     } else {
         long long wr = 1 + rng() % (n - 1), wc = rng() % (m - 1);
-        cout << "{\"type\":\"wall\",\"wall\":{\"kind\":\"straight\",\"wr\":" << wr
+        cout << "{\"type\":\"wall\",\"wall\":{\"wr\":" << wr
              << ",\"wc\":" << wc << ",\"orientation\":\"H\"}}";
     }
     return 0;

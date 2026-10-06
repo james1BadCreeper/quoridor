@@ -14,33 +14,14 @@ export function hSlotRect(wr, wc) {
 export function vSlotRect(wr, wc) {
   return { x: wc * P, y: GAP + wr * P, w: GAP, h: 2 * CELL + GAP };
 }
-// L 墙各臂矩形（与后端 arm 语义一致：N=北竖段，S=南竖段，W=西横段，E=东横段）
-export function lSegRects(wr, wc, arm) {
-  const segs = [];
-  if (arm.includes('N')) segs.push({ x: wc * P, y: GAP + (wr - 1) * P, w: GAP, h: CELL });
-  if (arm.includes('S')) segs.push({ x: wc * P, y: GAP + wr * P, w: GAP, h: CELL });
-  if (arm.includes('W')) segs.push({ x: GAP + (wc - 1) * P, y: wr * P, w: CELL, h: GAP });
-  if (arm.includes('E')) segs.push({ x: GAP + wc * P, y: wr * P, w: CELL, h: GAP });
-  // 拐角补块
-  segs.push({ x: wc * P, y: wr * P, w: GAP, h: GAP });
-  return segs;
-}
-
 function wallShapes(w) {
-  if (w.kind === 'straight' && w.orientation === 'H') return [hSlotRect(w.wr, w.wc)];
-  if (w.kind === 'straight' && w.orientation === 'V') return [vSlotRect(w.wr, w.wc)];
-  if (w.kind === 'L') return lSegRects(w.wr, w.wc, w.arm);
+  if (w.orientation === 'H') return [hSlotRect(w.wr, w.wc)];
+  if (w.orientation === 'V') return [vSlotRect(w.wr, w.wc)];
   return [];
 }
 
 function slotWall(wallSel, a, b) {
-  if (wallSel.kind === 'straight' && wallSel.orientation === 'H') {
-    return { kind: 'straight', wr: a, wc: b, orientation: 'H', arm: null };
-  }
-  if (wallSel.kind === 'straight' && wallSel.orientation === 'V') {
-    return { kind: 'straight', wr: a, wc: b, orientation: 'V', arm: null };
-  }
-  return { kind: 'L', wr: a, wc: b, orientation: null, arm: wallSel.arm };
+  return { wr: a, wc: b, orientation: wallSel.orientation };
 }
 
 export default function Board({
@@ -51,29 +32,15 @@ export default function Board({
   const H = st.n * P + GAP;
   const legalSet = useMemo(() => new Set(legal.map(([r, c]) => `${r},${c}`)), [legal]);
 
-  // 放墙槽位（仅当前工具栏类型）
+  // 放墙槽位（横墙 / 竖墙）
   const slots = useMemo(() => {
     const out = [];
-    if (wallSel.kind === 'straight' && wallSel.orientation === 'H') {
+    if (wallSel.orientation === 'H') {
       for (let wr = 1; wr <= st.n - 1; wr++)
         for (let wc = 0; wc <= st.m - 2; wc++) out.push({ key: `H${wr},${wc}`, rect: hSlotRect(wr, wc), wall: slotWall(wallSel, wr, wc) });
-    } else if (wallSel.kind === 'straight' && wallSel.orientation === 'V') {
+    } else {
       for (let wr = 0; wr <= st.n - 2; wr++)
         for (let wc = 1; wc <= st.m - 1; wc++) out.push({ key: `V${wr},${wc}`, rect: vSlotRect(wr, wc), wall: slotWall(wallSel, wr, wc) });
-    } else {
-      for (let wr = 1; wr <= st.n - 1; wr++)
-        for (let wc = 1; wc <= st.m - 1; wc++) {
-          const segs = lSegRects(wr, wc, wallSel.arm);
-          const xs = segs.map((s) => s.x), ys = segs.map((s) => s.y);
-          out.push({
-            key: `L${wr},${wc}`, wall: slotWall(wallSel, wr, wc),
-            rect: {
-              x: Math.min(...xs) - 3, y: Math.min(...ys) - 3,
-              w: Math.max(...xs.map((x, i) => x + segs[i].w)) - Math.min(...xs) + 6,
-              h: Math.max(...ys.map((y, i) => y + segs[i].h)) - Math.min(...ys) + 6,
-            },
-          });
-        }
     }
     return out;
   }, [st.n, st.m, wallSel]);

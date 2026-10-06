@@ -82,8 +82,9 @@ def post_wall(gid: str, req: WallDTO) -> dict:
     st = GAMES.get(gid)
     if st is None:
         raise HTTPException(404, "对局不存在")
-    w = Wall(kind=req.kind, wr=req.wr, wc=req.wc,  # type: ignore[arg-type]
-             orientation=req.orientation, arm=req.arm)  # type: ignore[arg-type]
+    if req.orientation not in ("H", "V"):
+        raise HTTPException(400, "墙朝向必须为 H 或 V")
+    w = Wall(wr=req.wr, wc=req.wc, orientation=req.orientation)
     try:
         apply_wall(st, w)
     except ValueError as e:
@@ -97,8 +98,9 @@ def preview_wall(gid: str, req: WallDTO) -> dict:
     st = GAMES.get(gid)
     if st is None:
         raise HTTPException(404, "对局不存在")
-    w = Wall(kind=req.kind, wr=req.wr, wc=req.wc,  # type: ignore[arg-type]
-             orientation=req.orientation, arm=req.arm)  # type: ignore[arg-type]
+    if req.orientation not in ("H", "V"):
+        return {"legal": False, "message": "墙朝向必须为 H 或 V"}
+    w = Wall(wr=req.wr, wc=req.wc, orientation=req.orientation)
     ok, msg = is_wall_legal(st, st.turn, w)
     return {"legal": ok, "message": msg}
 

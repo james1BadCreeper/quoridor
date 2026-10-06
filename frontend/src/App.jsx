@@ -11,8 +11,8 @@ function fmtHist(h, seatNames) {
   if (h.type === 'move') return `${who} 走子 → (${h.to[0]}, ${h.to[1]})`;
   if (h.type === 'wall') {
     const w = h.wall;
-    const kind = w.kind === 'L' ? `L 墙 ${w.arm}` : w.orientation === 'H' ? '横墙' : '竖墙';
-    return `${who} 放${kind} @ (${w.wr}, ${w.wc})`;
+    const wallName = w.orientation === 'H' ? '横墙' : '竖墙';
+    return `${who} 放${wallName} @ (${w.wr}, ${w.wc})`;
   }
   if (h.type === 'quicksand') return `${who} 踩中流沙，对方连续行动两次`;
   return JSON.stringify(h);
@@ -26,7 +26,7 @@ export default function App() {
   const [step, setStep] = useState(0);
   const [legal, setLegal] = useState([]);
   const [mode, setMode] = useState('move');
-  const [wallSel, setWallSel] = useState({ kind: 'straight', orientation: 'H', arm: 'NW' });
+  const [wallSel, setWallSel] = useState({ orientation: 'H' });
   const [ghost, setGhost] = useState(null);
   const [seatNames, setSeatNames] = useState(['先手', '后手']);
   const [seatTypes, setSeatTypes] = useState(['human', 'human']);
@@ -95,9 +95,7 @@ export default function App() {
     setBusy(true);
     try {
       appendSnap((await apiPlaceWall(gid, {
-        kind: wall.kind, wr: wall.wr, wc: wall.wc,
-        orientation: wall.kind === 'straight' ? wall.orientation : null,
-        arm: wall.kind === 'L' ? wall.arm : null,
+        wr: wall.wr, wc: wall.wc, orientation: wall.orientation,
       })).state);
     } catch (e) { alert(e.message); } finally { setBusy(false); }
   }
@@ -195,8 +193,8 @@ export default function App() {
               )}
             </div>
             <div className="wallsline">
-              <span className="wcount p0">● 墙 {shown.walls_left[0]}（L 已用 {shown.l_used[0]}/{shown.l_wall_quota}）</span>
-              <span className="wcount p1">○ 墙 {shown.walls_left[1]}（L 已用 {shown.l_used[1]}/{shown.l_wall_quota}）</span>
+              <span className="wcount p0">● 墙 {shown.walls_left[0]}</span>
+              <span className="wcount p1">○ 墙 {shown.walls_left[1]}</span>
               <span className="muted small">A=[{shown.goal_A.join(',')}] → 先手底线绿标　B=[{shown.goal_B.join(',')}] → 后手顶线蓝标</span>
             </div>
             <Board st={shown} legal={live && mode === 'move' ? legal : []}
@@ -228,21 +226,11 @@ export default function App() {
               {mode === 'wall' && (
                 <div>
                   <div className="seg">
-                    <button className={`segbtn${wallSel.kind === 'straight' && wallSel.orientation === 'H' ? ' active' : ''}`}
-                      onClick={() => setWallSel({ ...wallSel, kind: 'straight', orientation: 'H' })}>横墙</button>
-                    <button className={`segbtn${wallSel.kind === 'straight' && wallSel.orientation === 'V' ? ' active' : ''}`}
-                      onClick={() => setWallSel({ ...wallSel, kind: 'straight', orientation: 'V' })}>竖墙</button>
-                    <button className={`segbtn${wallSel.kind === 'L' ? ' active' : ''}`}
-                      onClick={() => setWallSel({ ...wallSel, kind: 'L' })}>L 墙</button>
+                    <button className={`segbtn${wallSel.orientation === 'H' ? ' active' : ''}`}
+                      onClick={() => setWallSel({ orientation: 'H' })}>横墙</button>
+                    <button className={`segbtn${wallSel.orientation === 'V' ? ' active' : ''}`}
+                      onClick={() => setWallSel({ orientation: 'V' })}>竖墙</button>
                   </div>
-                  {wallSel.kind === 'L' && (
-                    <div className="seg">
-                      {['NW', 'NE', 'SW', 'SE'].map((a) => (
-                        <button key={a} className={`segbtn${wallSel.arm === a ? ' active' : ''}`}
-                          onClick={() => setWallSel({ ...wallSel, arm: a })}>{a}</button>
-                      ))}
-                    </div>
-                  )}
                   <p className="muted small">把鼠标移到棋盘间隙上预览，绿色可放、红色非法，点击落子。</p>
                 </div>
               )}

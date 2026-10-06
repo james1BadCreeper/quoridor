@@ -26,27 +26,20 @@ export const apiImport = (state) => req('/api/games/import', json(state));
 function edgesOf(w) {
   const e = [];
   const add = (r1, c1, r2, c2) => { e.push(`${r1},${c1},${r2},${c2}`, `${r2},${c2},${r1},${c1}`); };
-  if (w.kind === 'straight' && w.orientation === 'H') {
+  if (w.orientation === 'H') {
     add(w.wr - 1, w.wc, w.wr, w.wc);
     add(w.wr - 1, w.wc + 1, w.wr, w.wc + 1);
-  } else if (w.kind === 'straight' && w.orientation === 'V') {
+  } else if (w.orientation === 'V') {
     add(w.wr, w.wc - 1, w.wr, w.wc);
     add(w.wr + 1, w.wc - 1, w.wr + 1, w.wc);
-  } else if (w.kind === 'L' && w.arm) {
-    const { wr, wc } = w;
-    if (w.arm.includes('N')) add(wr - 1, wc - 1, wr - 1, wc);
-    if (w.arm.includes('S')) add(wr, wc - 1, wr, wc);
-    if (w.arm.includes('W')) add(wr - 1, wc - 1, wr, wc - 1);
-    if (w.arm.includes('E')) add(wr - 1, wc, wr, wc);
   }
   return e;
 }
 
 function inBounds(st, w) {
   const { n, m } = st;
-  if (w.kind === 'straight' && w.orientation === 'H') return w.wr >= 1 && w.wr <= n - 1 && w.wc >= 0 && w.wc <= m - 2;
-  if (w.kind === 'straight' && w.orientation === 'V') return w.wr >= 0 && w.wr <= n - 2 && w.wc >= 1 && w.wc <= m - 1;
-  if (w.kind === 'L') return w.wr >= 1 && w.wr <= n - 1 && w.wc >= 1 && w.wc <= m - 1 && ['NW', 'NE', 'SW', 'SE'].includes(w.arm);
+  if (w.orientation === 'H') return w.wr >= 1 && w.wr <= n - 1 && w.wc >= 0 && w.wc <= m - 2;
+  if (w.orientation === 'V') return w.wr >= 0 && w.wr <= n - 2 && w.wc >= 1 && w.wc <= m - 1;
   return false;
 }
 
@@ -54,7 +47,6 @@ function inBounds(st, w) {
 export function wallLocalLegal(st, player, w) {
   if (!st || st.winner != null) return { ok: false, reason: '对局已结束' };
   if (st.walls_left[player] <= 0) return { ok: false, reason: '无剩余墙' };
-  if (w.kind === 'L' && st.l_used[player] >= st.l_wall_quota) return { ok: false, reason: 'L 墙配额已用完' };
   if (!inBounds(st, w)) return { ok: false, reason: '越界' };
   const edges = edgesOf(w);
   if (!edges.length) return { ok: false, reason: '未知墙类型' };

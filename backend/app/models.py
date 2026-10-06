@@ -6,11 +6,9 @@ from pydantic import BaseModel, Field
 
 
 class WallDTO(BaseModel):
-    kind: str = Field(description="straight 或 L")
     wr: int
     wc: int
-    orientation: str | None = None  # H / V
-    arm: str | None = None  # NW / NE / SW / SE
+    orientation: str  # H / V
 
 
 class NewGameRequest(BaseModel):

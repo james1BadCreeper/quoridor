@@ -5,7 +5,7 @@
 - 先手出生在顶行 (0, m//2)，后手出生在底行 (n-1, m//2)。
 - 先手目标：底行 (n-1, c)，c∈A；后手目标：顶行 (0, c)，c∈B。
   A、B 为列集合，各自大小均为 floor(m/2)，相互独立（可相交、可留空列）。
-- 墙分为直墙（长 2）和 L 墙（1+1 直角，总长 2）。
+- 墙为直墙（长 2）：横墙阻断纵向移动，竖墙阻断横向移动。
 """
 
 from __future__ import annotations
@@ -16,38 +16,33 @@ from typing import Literal
 
 # 类型别名
 Orientation = Literal["H", "V"]
-LArm = Literal["NW", "NE", "SW", "SE"]
 
 
 @dataclass
 class Wall:
-    """一面墙：直墙或 L 墙。"""
+    """一面直墙：orientation H/V，位置 (wr, wc) 含义见 blocked_edges()。"""
 
-    kind: Literal["straight", "L"]
-    # 直墙：orientation H/V，位置 (wr, wc) 含义见 blocked_edges()
-    # L 墙：位置为交点 (wr, wc)，wr∈[1,n-1], wc∈[1,m-1]，arm 为朝向
     wr: int
     wc: int
-    orientation: Orientation | None = None
-    arm: LArm | None = None
+    orientation: Orientation
 
     def to_dict(self) -> dict:
         return {
-            "kind": self.kind,
             "wr": self.wr,
             "wc": self.wc,
             "orientation": self.orientation,
-            "arm": self.arm,
         }
 
     @staticmethod
     def from_dict(d: dict) -> "Wall":
+        if d.get("kind", "straight") != "straight":
+            raise ValueError("旧棋谱含已删除的 L 墙，无法导入")
+        if d.get("orientation") not in ("H", "V"):
+            raise ValueError(f"未知墙朝向：{d.get('orientation')}")
         return Wall(
-            kind=d["kind"],
             wr=d["wr"],
             wc=d["wc"],
-            orientation=d.get("orientation"),
-            arm=d.get("arm"),
+            orientation=d["orientation"],
         )
 
 
@@ -56,10 +51,8 @@ class GameState:
     n: int
     m: int
     walls_total: int  # 每人初始墙数 v
-    l_wall_quota: int  # 每人可转 L 墙上限 floor(v/3)
     pawns: list[list[int]]  # [先手(r,c), 后手(r,c)]
-    walls_left: list[int]  # 剩余墙数（含 L）
-    l_used: list[int]  # 已用 L 墙数
+    walls_left: list[int]  # 剩余墙数
     walls: list[Wall] = field(default_factory=list)
     deads: set[tuple[int, int]] = field(default_factory=set)
     sands: set[tuple[int, int]] = field(default_factory=set)
@@ -76,10 +69,8 @@ class GameState:
             "n": self.n,
             "m": self.m,
             "walls_total": self.walls_total,
-            "l_wall_quota": self.l_wall_quota,
             "pawns": self.pawns,
             "walls_left": self.walls_left,
-            "l_used": self.l_used,
             "walls": [w.to_dict() for w in self.walls],
             "deads": sorted(self.deads),
             "sands": sorted(self.sands),
@@ -98,10 +89,8 @@ class GameState:
             n=d["n"],
             m=d["m"],
             walls_total=d["walls_total"],
-            l_wall_quota=d["l_wall_quota"],
             pawns=[list(p) for p in d["pawns"]],
             walls_left=list(d["walls_left"]),
-            l_used=list(d["l_used"]),
             walls=[Wall.from_dict(w) for w in d.get("walls", [])],
             deads=set(tuple(x) for x in d.get("deads", [])),
             sands=set(tuple(x) for x in d.get("sands", [])),
@@ -178,25 +167,13 @@ def build_blocked_edges(state: GameState) -> set[tuple[int, int, int, int]]:
         blocked.add((r2, c2, r1, c1))
 
     for w in state.walls:
-        if w.kind == "straight" and w.orientation == "H":
+        if w.orientation == "H":
             # 交界行 wr，覆盖列 wc, wc+1
             add(w.wr - 1, w.wc, w.wr, w.wc)
             add(w.wr - 1, w.wc + 1, w.wr, w.wc + 1)
-        elif w.kind == "straight" and w.orientation == "V":
+        elif w.orientation == "V":
             add(w.wr, w.wc - 1, w.wr, w.wc)
             add(w.wr + 1, w.wc - 1, w.wr + 1, w.wc)
-        elif w.kind == "L" and w.arm is not None:
-            wr, wc = w.wr, w.wc
-            # 北臂：分隔 (wr-1,wc-1)-(wr-1,wc)；南臂：(wr,wc-1)-(wr,wc)
-            # 西臂：分隔 (wr-1,wc-1)-(wr,wc-1)；东臂：(wr-1,wc)-(wr,wc)
-            if "N" in w.arm:
-                add(wr - 1, wc - 1, wr - 1, wc)
-            if "S" in w.arm:
-                add(wr, wc - 1, wr, wc)
-            if "W" in w.arm:
-                add(wr - 1, wc - 1, wr, wc - 1)
-            if "E" in w.arm:
-                add(wr - 1, wc, wr, wc)
     return blocked
 
 
@@ -208,22 +185,12 @@ def wall_edges(w: Wall) -> set[tuple[int, int, int, int]]:
         s.add((r1, c1, r2, c2))
         s.add((r2, c2, r1, c1))
 
-    if w.kind == "straight" and w.orientation == "H":
+    if w.orientation == "H":
         add(w.wr - 1, w.wc, w.wr, w.wc)
         add(w.wr - 1, w.wc + 1, w.wr, w.wc + 1)
-    elif w.kind == "straight" and w.orientation == "V":
+    elif w.orientation == "V":
         add(w.wr, w.wc - 1, w.wr, w.wc)
         add(w.wr + 1, w.wc - 1, w.wr + 1, w.wc)
-    elif w.kind == "L" and w.arm is not None:
-        wr, wc = w.wr, w.wc
-        if "N" in w.arm:
-            add(wr - 1, wc - 1, wr - 1, wc)
-        if "S" in w.arm:
-            add(wr, wc - 1, wr, wc)
-        if "E" in w.arm:
-            add(wr - 1, wc, wr, wc)
-        if "W" in w.arm:
-            add(wr - 1, wc - 1, wr, wc - 1)
     return s
 
 
@@ -256,7 +223,6 @@ def new_game(
     if not (9 <= n <= 15 and 9 <= m <= 15):
         raise ValueError("n, m 必须在 [9,15] 内")
     v = wall_count(n, m)
-    quota = v // 3
     start0 = [0, m // 2]
     start1 = [n - 1, m // 2]
     if goal_A is None and goal_B is None:
@@ -289,9 +255,9 @@ def new_game(
         rest = [x for x in candidates if x not in deads]
         sands = set(rest[:n_sand])
         st = GameState(
-            n=n, m=m, walls_total=v, l_wall_quota=quota,
+            n=n, m=m, walls_total=v,
             pawns=[list(start0), list(start1)],
-            walls_left=[v, v], l_used=[0, 0],
+            walls_left=[v, v],
             deads=deads, sands=sands,
             goal_A=goal_A, goal_B=goal_B,
         )
@@ -299,9 +265,9 @@ def new_game(
             return st
     # 兜底：无特殊格
     return GameState(
-        n=n, m=m, walls_total=v, l_wall_quota=quota,
+        n=n, m=m, walls_total=v,
         pawns=[list(start0), list(start1)],
-        walls_left=[v, v], l_used=[0, 0],
+        walls_left=[v, v],
         goal_A=goal_A, goal_B=goal_B,
     )
 
@@ -329,21 +295,17 @@ def legal_pawn_moves(state: GameState, player: int) -> list[list[int]]:
 
 def _wall_in_bounds(state: GameState, w: Wall) -> bool:
     n, m = state.n, state.m
-    if w.kind == "straight" and w.orientation == "H":
+    if w.orientation == "H":
         return 1 <= w.wr <= n - 1 and 0 <= w.wc <= m - 2
-    if w.kind == "straight" and w.orientation == "V":
+    if w.orientation == "V":
         return 0 <= w.wr <= n - 2 and 1 <= w.wc <= m - 1
-    if w.kind == "L":
-        return 1 <= w.wr <= n - 1 and 1 <= w.wc <= m - 1 and w.arm in ("NW", "NE", "SW", "SE")
     return False
 
 
 def is_wall_legal(state: GameState, player: int, w: Wall) -> tuple[bool, str]:
-    """放墙合法性：有余墙、L 配额、范围内、不与已有墙重边。"""
+    """放墙合法性：有余墙、范围内、不与已有墙重边。"""
     if state.walls_left[player] <= 0:
         return False, "该玩家无剩余墙"
-    if w.kind == "L" and state.l_used[player] >= state.l_wall_quota:
-        return False, "L 墙配额已用完"
     if not _wall_in_bounds(state, w):
         return False, "墙位置越界"
     edges = wall_edges(w)
@@ -411,8 +373,6 @@ def apply_wall(state: GameState, w: Wall) -> GameState:
         raise ValueError(f"非法放墙：{msg}")
     state.walls.append(w)
     state.walls_left[player] -= 1
-    if w.kind == "L":
-        state.l_used[player] += 1
     state.history.append({"player": player, "type": "wall", "wall": w.to_dict()})
     _advance_turn(state)
     check_surround_win(state)
@@ -447,10 +407,10 @@ def random_ai_move(state: GameState, rng: random.Random | None = None) -> dict:
     if state.walls_left[player] > 0 and rng.random() < 0.3:
         for _ in range(50):
             if rng.random() < 0.5:
-                w = Wall(kind="straight", wr=rng.randint(1, state.n - 1),
+                w = Wall(wr=rng.randint(1, state.n - 1),
                          wc=rng.randint(0, state.m - 2), orientation="H")
             else:
-                w = Wall(kind="straight", wr=rng.randint(0, state.n - 2),
+                w = Wall(wr=rng.randint(0, state.n - 2),
                          wc=rng.randint(1, state.m - 1), orientation="V")
             ok, _ = is_wall_legal(state, player, w)
             if ok:
