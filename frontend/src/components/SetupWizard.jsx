@@ -1,5 +1,14 @@
-// 开局向导：完整规则 2 流程 —— 随机出题人 → 选 A/B 列集 → 另一方选边。
-import { useState } from 'react';
+// 开局向导：完整规则流程 —— 随机出题人 → 选 A/B 列集 → 另一方选边 → 选技能卡。
+import { useEffect, useState } from 'react';
+import { apiSkills, skillK } from '../api.js';
+
+const FALLBACK_SKILLS = {
+  l_remodel: { name: '改造', desc: '获得 1 次 L 形墙放置权' },
+  double_move: { name: '连续行动', desc: '本回合连续移动两次' },
+  phase_walk: { name: '穿墙', desc: '下一次走子无视墙' },
+  make_sand: { name: '流沙陷阱', desc: '将一个格变为流沙' },
+  free_wall: { name: '免费墙', desc: '下一次放墙不消耗存量' },
+};
 
 const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
@@ -72,10 +81,29 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   const [goalB, setGoalB] = useState([]);
   const [phase, setPhase] = useState('A'); // 当前正在选 A 还是 B
   const [side, setSide] = useState(null); // picker 选 'first' | 'second'
+  const [skillDefs, setSkillDefs] = useState(FALLBACK_SKILLS);
+  const [skillPicks, setSkillPicks] = useState([[], []]); // 每位参与者的技能卡（AI 席位开局时随机）
+
+  useEffect(() => {
+    apiSkills().then(setSkillDefs).catch(() => {});
+  }, []);
 
   const picker = 1 - chooser;
   const k = Math.floor(fm / 2);
+  const kk = skillK(fn, fm); // 本局技能卡数 F(n,m)
   const goalsReady = goalA.length === k && goalB.length === k;
+  const skillsReady =
+    skillPicks[0].length === kk && skillPicks[1].length === kk &&
+    [...skillPicks[0], ...skillPicks[1]].every((s) => s in skillDefs);
+
+  function setPick(i, arr) {
+    setSkillPicks(skillPicks.map((v, j) => (j === i ? arr : v)));
+  }
+
+  function randomPicks() {
+    const ids = Object.keys(skillDefs);
+    return Array.from({ length: kk }, () => ids[Math.floor(Math.random() * ids.length)]);
+  }
 
   function toSetup2() {
     const nn = n === '' ? randInt(9, 15) : Math.min(15, Math.max(9, Number(n) || 9));
@@ -127,13 +155,26 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
       goal_A: goalA, goal_B: goalB,
       participants: [{ name: names[0], type: ptypes[0] }, { name: names[1], type: ptypes[1] }],
       seatOf, chooser, side,
+      // 人类席位用所选牌，AI 席位传 null（由后端随机）
+      skillPicks: [ptypes[0] === 'human' ? skillPicks[0] : null,
+                   ptypes[1] === 'human' ? skillPicks[1] : null],
     });
+  }
+
+  function adjustPick(i, id, delta) {
+    const cur = skillPicks[i];
+    const count = cur.filter((s) => s === id).length;
+    if (delta > 0 && cur.length < kk) setPick(i, [...cur, id]);
+    if (delta < 0 && count > 0) {
+      const idx = cur.indexOf(id);
+      setPick(i, cur.filter((_, j) => j !== idx));
+    }
   }
 
   return (
     <div className="card wizard">
       <div className="steps">
-        {['基本设置', '出题选集合', '选边开局'].map((t, i) => (
+        {['基本设置', '出题选集合', '选边', '选技能卡'].map((t, i) => (
           <span key={t} className={`step${i === step ? ' active' : ''}${i < step ? ' done' : ''}`}>
             {i + 1}. {t}
           </span>
@@ -216,7 +257,53 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
           )}
           <div className="rowbtns">
             <button className="btn ghost" onClick={() => setStep(1)}>上一步</button>
-            <button className="btn primary" disabled={!side} onClick={start}>开始对局</button>
+            <button className="btn primary" disabled={!side} onClick={() => {
+              // AI 席位先随机一版预览（可重随），人类席位保留已选
+              setSkillPicks([0, 1].map((i) => (
+                ptypes[i] === 'ai' ? randomPicks() : (skillPicks[i].length === kk ? skillPicks[i] : [])
+              )));
+              setStep(3);
+            }}>
+              下一步：选技能卡
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === 3 && (
+        <div>
+          <p>本局每人选 <b className="hl">{kk} 张</b>技能卡（F(n,m)=max(2, v//5)，可重复；同机对战手牌互可见）。</p>
+          {[0, 1].map((i) => (
+            <div className="pseat" key={i} style={{ marginBottom: 10 }}>
+              <b>{names[i]}（{ptypes[i] === 'human' ? '人类自选' : 'AI 随机'}）：{skillPicks[i].length}/{kk}</b>
+              {Object.entries(skillDefs).map(([id, d]) => {
+                const count = skillPicks[i].filter((s) => s === id).length;
+                return (
+                  <div className="skillrow" key={id}>
+                    <span><b>{d.name}</b> <span className="muted small">{d.desc}</span></span>
+                    <span>
+                      {ptypes[i] === 'human' ? (
+                        <>
+                          <button className="btn ghost mini" onClick={() => adjustPick(i, id, -1)}>−</button>
+                          <b> {count} </b>
+                          <button className="btn ghost mini" onClick={() => adjustPick(i, id, 1)}>＋</button>
+                        </>
+                      ) : (
+                        <b> ×{count} </b>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+              <div className="rowbtns">
+                <button className="btn ghost" onClick={() => setPick(i, randomPicks())}>随机填充</button>
+                {ptypes[i] === 'human' && <button className="btn ghost" onClick={() => setPick(i, [])}>清空</button>}
+              </div>
+            </div>
+          ))}
+          <div className="rowbtns">
+            <button className="btn ghost" onClick={() => setStep(2)}>上一步</button>
+            <button className="btn primary" disabled={!skillsReady} onClick={start}>开始对局</button>
           </div>
         </div>
       )}

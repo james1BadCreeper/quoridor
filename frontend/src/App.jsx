@@ -1,18 +1,28 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Board from './components/Board.jsx';
 import SetupWizard from './components/SetupWizard.jsx';
-import { apiAiMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall, wallLocalLegal } from './api.js';
+import {
+  apiAiMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall,
+  apiSkillPlay, apiSkillRandom, apiSkillSelect, apiSkills,
+  sandLocalLegal, wallLocalLegal,
+} from './api.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 历史记录中文格式化
-function fmtHist(h, seatNames) {
+function fmtHist(h, seatNames, skillDefs) {
   const who = `${seatNames[h.player]}(${h.player === 0 ? '先手' : '后手'})`;
   if (h.type === 'move') return `${who} 走子 → (${h.to[0]}, ${h.to[1]})`;
+  if (h.type === 'skill') {
+    const nm = skillDefs[h.skill]?.name ?? h.skill;
+    const extra = h.skill === 'make_sand' && h.to ? ` @ (${h.to[0]}, ${h.to[1]})` : '';
+    return `${who} 打出技能【${nm}】${extra}（双方得知）`;
+  }
+  if (h.type === 'select_skills') return `${who} 选定技能卡`;
   if (h.type === 'wall') {
     const w = h.wall;
-    const wallName = w.orientation === 'H' ? '横墙' : '竖墙';
-    return `${who} 放${wallName} @ (${w.wr}, ${w.wc})`;
+    const kind = w.kind === 'L' ? `L 墙 ${w.arm}` : w.orientation === 'H' ? '横墙' : '竖墙';
+    return `${who} 放${kind} @ (${w.wr}, ${w.wc})`;
   }
   if (h.type === 'quicksand') return `${who} 踩中流沙，对方连续行动两次`;
   return JSON.stringify(h);
@@ -24,14 +34,20 @@ export default function App() {
   const [state, setState] = useState(null); // 最新状态（权威）
   const [snaps, setSnaps] = useState([]); // 快照，用于回放
   const [step, setStep] = useState(0);
-  const [legal, setLegal] = useState([]);
+  const [legal, setLegal] = useState({ moves: [], phased: false });
   const [mode, setMode] = useState('move');
-  const [wallSel, setWallSel] = useState({ orientation: 'H' });
+  const [wallSel, setWallSel] = useState({ kind: 'straight', orientation: 'H', arm: 'NW' });
   const [ghost, setGhost] = useState(null);
   const [seatNames, setSeatNames] = useState(['先手', '后手']);
   const [seatTypes, setSeatTypes] = useState(['human', 'human']);
   const [autoAI, setAutoAI] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [skillDefs, setSkillDefs] = useState({});
+  const [sandMode, setSandMode] = useState(false); // 流沙陷阱选格模式
+
+  useEffect(() => {
+    apiSkills().then(setSkillDefs).catch(() => {});
+  }, []);
 
   // refs 供 AI 走到底循环读取最新值
   const stateRef = useRef(state); stateRef.current = state;
@@ -52,7 +68,7 @@ export default function App() {
   })();
 
   async function refreshLegal(g, st) {
-    try { setLegal(await apiLegal(g, st.turn)); } catch { setLegal([]); }
+    try { setLegal(await apiLegal(g, st.turn)); } catch { setLegal({ moves: [], phased: false }); }
   }
 
   function appendSnap(st) {
@@ -69,15 +85,26 @@ export default function App() {
       const j = await apiNew({ n: cfg.n, m: cfg.m, seed: cfg.seed, goal_A: cfg.goal_A, goal_B: cfg.goal_B });
       const names = [cfg.participants[cfg.seatOf[0]].name, cfg.participants[cfg.seatOf[1]].name];
       const types = [cfg.participants[cfg.seatOf[0]].type, cfg.participants[cfg.seatOf[1]].type];
+      // 双方选技能卡：人类用向导所选，AI 随机（cfg.skillPicks[participantIdx]，AI 席为 null）
+      let cur = j.state;
+      for (let seat = 0; seat < 2; seat++) {
+        const p = cfg.seatOf[seat];
+        if (cfg.skillPicks[p]) {
+          cur = (await apiSkillSelect(j.id, seat, cfg.skillPicks[p])).state;
+        } else {
+          cur = (await apiSkillRandom(j.id, seat)).state;
+        }
+      }
       setGid(j.id);
       setSeatNames(names);
       setSeatTypes(types);
-      setSnaps([j.state]);
+      setSnaps([cur]);
       setStep(0);
-      setState(j.state);
+      setState(cur);
       setMode('move');
+      setSandMode(false);
       setWizardOpen(false);
-      refreshLegal(j.id, j.state);
+      refreshLegal(j.id, cur);
     } catch (e) { alert(`开局失败：${e.message}`); } finally { setBusy(false); }
   }
 
@@ -95,8 +122,24 @@ export default function App() {
     setBusy(true);
     try {
       appendSnap((await apiPlaceWall(gid, {
-        wr: wall.wr, wc: wall.wc, orientation: wall.orientation,
+        kind: wall.kind, wr: wall.wr, wc: wall.wc,
+        orientation: wall.kind === 'L' ? null : wall.orientation,
+        arm: wall.kind === 'L' ? wall.arm : null,
       })).state);
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  async function doPlaySkill(skill, to) {
+    if (!live || busy) return;
+    if (skill === 'make_sand' && !to) { setSandMode(true); setMode('move'); return; }
+    if (to) {
+      const chk = sandLocalLegal(state, to[0], to[1]);
+      if (!chk.ok) { alert(`此处不可布沙：${chk.reason}`); return; }
+    }
+    setBusy(true);
+    try {
+      appendSnap((await apiSkillPlay(gid, skill, to ?? null)).state);
+      setSandMode(false);
     } catch (e) { alert(e.message); } finally { setBusy(false); }
   }
 
@@ -193,17 +236,29 @@ export default function App() {
               )}
             </div>
             <div className="wallsline">
-              <span className="wcount p0">● 墙 {shown.walls_left[0]}</span>
-              <span className="wcount p1">○ 墙 {shown.walls_left[1]}</span>
+              <span className="wcount p0">● 墙 {shown.walls_left[0]}（L券 {shown.l_bonus?.[0] ?? 0}）</span>
+              <span className="wcount p1">○ 墙 {shown.walls_left[1]}（L券 {shown.l_bonus?.[1] ?? 0}）</span>
+              {shown.must_move && <span className="pill warn">连续行动：只能走子</span>}
+              {shown.phase_buff?.[shown.turn] && <span className="pill">穿墙就绪</span>}
+              {shown.free_buff?.[shown.turn] && <span className="pill">免费墙就绪</span>}
               <span className="muted small">A=[{shown.goal_A.join(',')}] → 先手底线绿标　B=[{shown.goal_B.join(',')}] → 后手顶线蓝标</span>
             </div>
-            <Board st={shown} legal={live && mode === 'move' ? legal : []}
+            <Board st={shown} legal={live && mode === 'move' && !sandMode ? legal.moves : []}
+              phased={live && legal.phased}
               mode={mode} wallSel={wallSel} ghost={ghost} wallOwners={wallOwners}
               interactive={!!live}
               onCellClick={(r, c) => doMove(r, c)}
               onSlotHover={(w) => setGhost({ wall: w, ...wallLocalLegal(state, state.turn, w) })}
               onSlotLeave={() => setGhost(null)}
-              onSlotClick={(w) => doPlaceWall(w)} />
+              onSlotClick={(w) => doPlaceWall(w)}
+              sandMode={sandMode}
+              onSandClick={(r, c) => doPlaySkill('make_sand', [r, c])} />
+            {sandMode && (
+              <div className="rowbtns">
+                <span className="hl">流沙陷阱：在棋盘上点一个格（禁死点/已有流沙/棋子/获胜点）</span>
+                <button className="btn ghost" onClick={() => setSandMode(false)}>取消</button>
+              </div>
+            )}
             <div className="legend">
               <span><i className="sw death" />死点不可进</span>
               <span><i className="sw sand" />流沙：对方连走两次</span>
@@ -218,6 +273,8 @@ export default function App() {
               <div className="seg">
                 {['move', 'wall'].map((v) => (
                   <button key={v} className={`segbtn${mode === v ? ' active' : ''}`}
+                    disabled={v === 'wall' && !!shown.must_move}
+                    title={v === 'wall' && shown.must_move ? '连续行动中只能走子' : ''}
                     onClick={() => { setMode(v); setGhost(null); }}>
                     {v === 'move' ? '走子' : '放墙'}
                   </button>
@@ -226,11 +283,25 @@ export default function App() {
               {mode === 'wall' && (
                 <div>
                   <div className="seg">
-                    <button className={`segbtn${wallSel.orientation === 'H' ? ' active' : ''}`}
-                      onClick={() => setWallSel({ orientation: 'H' })}>横墙</button>
-                    <button className={`segbtn${wallSel.orientation === 'V' ? ' active' : ''}`}
-                      onClick={() => setWallSel({ orientation: 'V' })}>竖墙</button>
+                    <button className={`segbtn${wallSel.kind === 'straight' && wallSel.orientation === 'H' ? ' active' : ''}`}
+                      onClick={() => setWallSel({ kind: 'straight', orientation: 'H', arm: 'NW' })}>横墙</button>
+                    <button className={`segbtn${wallSel.kind === 'straight' && wallSel.orientation === 'V' ? ' active' : ''}`}
+                      onClick={() => setWallSel({ kind: 'straight', orientation: 'V', arm: 'NW' })}>竖墙</button>
+                    <button className={`segbtn${wallSel.kind === 'L' ? ' active' : ''}`}
+                      disabled={(state?.l_bonus?.[state.turn] ?? 0) <= 0}
+                      title="需先打出改造技能获得 L 券"
+                      onClick={() => setWallSel({ kind: 'L', orientation: null, arm: 'NW' })}>
+                      L 墙（券×{state?.l_bonus?.[state.turn] ?? 0}）
+                    </button>
                   </div>
+                  {wallSel.kind === 'L' && (
+                    <div className="seg">
+                      {['NW', 'NE', 'SW', 'SE'].map((a) => (
+                        <button key={a} className={`segbtn${wallSel.arm === a ? ' active' : ''}`}
+                          onClick={() => setWallSel({ ...wallSel, arm: a })}>{a}</button>
+                      ))}
+                    </div>
+                  )}
                   <p className="muted small">把鼠标移到棋盘间隙上预览，绿色可放、红色非法，点击落子。</p>
                 </div>
               )}
@@ -242,6 +313,33 @@ export default function App() {
                   {autoAI ? '停止连走' : 'AI 走到底'}
                 </button>
               </div>
+            </div>
+
+            <div className="card">
+              <h3>技能卡{shown.seq_skill_used ? '（本序列已打出过）' : ''}</h3>
+              <p className="muted small">行动前可打出一张，不占轮次；连续行动序列中最多一张。同机对战手牌互可见。</p>
+              {[0, 1].map((seat) => {
+                const hand = shown.hands?.[seat] ?? {};
+                const ids = Object.keys(hand);
+                const mine = live && shown.turn === seat;
+                return (
+                  <div className="hand" key={seat}>
+                    <div className={`seatname p${seat}`}>{seatNames[seat]}（{seat === 0 ? '先手' : '后手'}）</div>
+                    {ids.length === 0 && <span className="muted small">无手牌</span>}
+                    {ids.map((id) => (
+                      <span className="skillchip" key={id} title={skillDefs[id]?.desc ?? id}>
+                        {skillDefs[id]?.name ?? id}×{hand[id]}
+                        <button className="btn ghost mini"
+                          disabled={!mine || busy || shown.seq_skill_used}
+                          title={mine ? (shown.seq_skill_used ? '本序列已打出过' : '行动前打出') : '轮到该方时打出'}
+                          onClick={() => doPlaySkill(id)}>
+                          打出
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
 
             {snaps.length > 1 && (
@@ -258,7 +356,7 @@ export default function App() {
               <div className="history">
                 {(shown.history || []).map((h, i) => (
                   <div key={i} className={i === (shown.history.length - 1) ? 'hl' : ''}>
-                    {i + 1}. {fmtHist(h, seatNames)}
+                    {i + 1}. {fmtHist(h, seatNames, skillDefs)}
                   </div>
                 ))}
               </div>

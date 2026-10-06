@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 class WallDTO(BaseModel):
     wr: int
     wc: int
-    orientation: str  # H / V
+    orientation: str | None = None  # H / V（直墙）
+    kind: str = "straight"  # straight 或 L（L 墙需改造技能放置权）
+    arm: str | None = None  # L 墙朝向 NW / NE / SW / SE
 
 
 class NewGameRequest(BaseModel):
@@ -25,3 +27,18 @@ class PawnMoveRequest(BaseModel):
 
 class AIRequest(BaseModel):
     seed: int | None = None
+
+
+class SkillSelectRequest(BaseModel):
+    player: int
+    skills: list[str]
+
+
+class SkillRandomRequest(BaseModel):
+    player: int
+    seed: int | None = None
+
+
+class SkillPlayRequest(BaseModel):
+    skill: str
+    to: list[int] | None = None  # 仅流沙陷阱使用

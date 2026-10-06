@@ -154,6 +154,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color:
 .q-deadmark line { stroke: #64748b; stroke-width: 3; }
 .q-sandmark { color: #92400e; }
 .q-dot { fill: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.q-dot.phased { fill: #c084fc; }
 .q-pawn { stroke: rgba(255, 255, 255, .85); stroke-width: 2; }
 .q-pawntext { fill: #fff; font-size: 13px; font-weight: 700; pointer-events: none; }
 .q-pawnturn circle { filter: drop-shadow(0 0 7px rgba(255, 255, 255, .75)); }
@@ -168,7 +169,23 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color:
 .q-clickable { cursor: pointer; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 
-/* 分段选择 */
+/* 技能 */
+.hand { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+.seatname { font-weight: 700; font-size: 13.5px; margin-bottom: 8px; }
+.seatname.p0 { color: #fda4af; }
+.seatname.p1 { color: #93c5fd; }
+.skillchip {
+  display: inline-flex; align-items: center; gap: 7px; margin: 0 8px 8px 0;
+  padding: 5px 6px 5px 11px; border-radius: 999px; font-size: 13px;
+  background: rgba(56, 189, 248, .12); border: 1px solid var(--accent);
+}
+.skillrow {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 2px; border-bottom: 1px dashed var(--line); font-size: 13.5px;
+}
+.btn.mini { padding: 3px 10px; font-size: 12px; margin: 0 2px; }
+.q-clickable.sandpick { cursor: copy; }
+.sandpick:hover { fill: rgba(251, 191, 36, .3); }
 .seg { display: flex; gap: 6px; background: #0e1628; border: 1px solid var(--line); border-radius: 10px; padding: 4px; margin-bottom: 10px; }
 .segbtn {
   flex: 1; border: none; background: transparent; color: var(--muted);

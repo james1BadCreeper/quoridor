@@ -1,13 +1,29 @@
-"""核心规则冒烟测试。"""
+"""核心规则 + 技能系统测试。"""
+
+import pytest
 
 from app.engine import (
+    SKILLS,
     GameState,
     Wall,
     apply_pawn_move,
     apply_wall,
+    is_wall_legal,
     legal_pawn_moves,
     new_game,
+    play_skill,
+    select_skills,
+    skill_count,
 )
+
+
+def _started(n=9, m=9, seed=3, **kw) -> GameState:
+    """开一局并让双方选满技能卡（可直接行动的状态）。"""
+    st = new_game(n=n, m=m, seed=seed, **kw)
+    ids = list(SKILLS.keys())
+    select_skills(st, 0, [ids[i % len(ids)] for i in range(st.skill_k)])
+    select_skills(st, 1, ["double_move"] * st.skill_k)
+    return st
 
 
 def test_new_game_paths_exist():
@@ -15,6 +31,7 @@ def test_new_game_paths_exist():
     assert st.walls_total == (10 * 10) // 10 == 10
     assert len(st.goal_A) == 4 and len(st.goal_B) == 4
     assert len(legal_pawn_moves(st, 0)) > 0
+    assert st.skill_k == 2 and not st.started
 
 
 def test_goal_sets_may_overlap():
@@ -34,8 +51,6 @@ def test_new_game_manual_goals():
 
 
 def test_new_game_bad_goals_rejected():
-    import pytest
-
     with pytest.raises(ValueError):
         new_game(n=9, m=9, seed=1, goal_A=[0, 1], goal_B=[2, 3])  # 大小不对
     with pytest.raises(ValueError):
@@ -44,15 +59,198 @@ def test_new_game_bad_goals_rejected():
         new_game(n=9, m=9, seed=1, goal_A=[0, 1, 2, 3], goal_B=None)  # 只给一边
 
 
-def test_quicksand_grants_double_move():
+def test_skill_count_formula():
+    # 最小地图 k=2，大地图递增：F(n,m)=max(2, v//5)
+    assert skill_count(9, 9) == 2
+    assert skill_count(12, 12) == 3
+    assert skill_count(15, 15) == 5
+
+
+def test_no_deads_or_sands_on_first_last_rows():
+    # 首末行（出生/获胜行）不得生成死点与流沙
+    for seed in range(30):
+        for n, m in [(9, 9), (12, 10), (15, 15)]:
+            st = new_game(n=n, m=m, seed=seed)
+            for r, c in list(st.deads) + list(st.sands):
+                assert r not in (0, n - 1), f"seed={seed} {(r, c)}"
+
+
+def test_moves_blocked_before_skills_picked():
     st = new_game(n=9, m=9, seed=3)
+    with pytest.raises(ValueError):
+        apply_pawn_move(st, [1, 4])
+    select_skills(st, 0, ["phase_walk"] * st.skill_k)
+    assert not st.started  # 另一方未选，仍不可行动
+    select_skills(st, 1, ["phase_walk"] * st.skill_k)
+    assert st.started
+    with pytest.raises(ValueError):
+        select_skills(st, 0, ["phase_walk"] * st.skill_k)  # 不可重复选
+    with pytest.raises(ValueError):
+        select_skills(GameState(n=9, m=9, walls_total=10, pawns=[[0, 4], [8, 4]],
+                               walls_left=[10, 10], skill_k=2),
+                      0, ["nope", "phase_walk"])  # 未知技能
+
+
+def test_quicksand_grants_double_move():
+    st = _started()
     st.deads = set()
     st.sands = {(1, st.pawns[0][1])}
     st.goal_A = list(range(4))
     st.goal_B = list(range(4, 8))
-    apply_pawn_move(st, [1, st.pawns[0][1]])  # 先手踩流沙
-    # 对方连续行动两次：turn 切到对方且 bonus=1
+    c0 = st.pawns[0][1]
+    apply_pawn_move(st, [1, c0])  # 先手踩流沙
     assert st.turn == 1 and st.bonus_moves == 1
+    # 对方连续行动两次：走两步后轮次回到先手
+    p = list(st.pawns[1])
+    apply_pawn_move(st, [p[0] - 1, p[1]])
+    assert st.turn == 1 and st.bonus_moves == 0
+    p = list(st.pawns[1])
+    apply_pawn_move(st, [p[0] - 1, p[1]])
+    assert st.turn == 0
+
+
+def test_double_move_skill():
+    st = _started()
+    st.hands[0] = {"double_move": 1}
+    play_skill(st, "double_move")
+    assert st.bonus_moves == 1 and st.must_move
+    # 两次都必须是移动：放墙被拒
+    with pytest.raises(ValueError):
+        apply_wall(st, Wall(wr=2, wc=3, orientation="H"))
+    p = list(st.pawns[0])
+    apply_pawn_move(st, [p[0] + 1, p[1]])
+    assert st.turn == 0  # 同一人继续
+    p = list(st.pawns[0])
+    apply_pawn_move(st, [p[0] + 1, p[1]])
+    assert st.turn == 1 and not st.must_move
+
+
+def test_double_move_overridden_by_quicksand():
+    st = _started()
+    st.hands[0] = {"double_move": 1}
+    st.deads = set()
+    st.sands = {(1, st.pawns[0][1])}
+    play_skill(st, "double_move")
+    c0 = st.pawns[0][1]
+    apply_pawn_move(st, [1, c0])  # 第一步踩流沙：S2 剩余取消，转对方连走
+    assert st.turn == 1 and st.bonus_moves == 1 and not st.must_move
+
+
+def test_only_one_skill_per_sequence():
+    st = _started()
+    st.hands[0] = {"phase_walk": 1, "free_wall": 1}
+    play_skill(st, "phase_walk")
+    with pytest.raises(ValueError):
+        play_skill(st, "free_wall")  # 同一序列第二张被拒
+    # 行动后轮次交替，新序列可再打出
+    p = list(st.pawns[0])
+    apply_pawn_move(st, [p[0] + 1, p[1]])
+    st.hands[1] = {"free_wall": 1}
+    play_skill(st, "free_wall")  # 对方新序列可以打出
+    assert st.seq_skill_used
+
+
+def test_quicksand_double_allows_one_skill():
+    st = _started()
+    st.deads = set()
+    st.sands = {(1, st.pawns[0][1])}
+    st.hands[1] = {"phase_walk": 2}
+    c0 = st.pawns[0][1]
+    apply_pawn_move(st, [1, c0])  # 先手踩流沙，对方连走
+    play_skill(st, "phase_walk")  # 第一次行动前打出一张
+    p = list(st.pawns[1])
+    apply_pawn_move(st, [p[0] - 1, p[1]])
+    with pytest.raises(ValueError):
+        play_skill(st, "phase_walk")  # 第二次行动前不可再打出
+
+
+def test_phase_walk_ignores_walls():
+    st = _started()
+    st.hands[0] = {"phase_walk": 1}
+    r, c = st.pawns[0]
+    st.walls.append(Wall(wr=r + 1, wc=c, orientation="H"))  # 封住南行
+    assert [r + 1, c] not in legal_pawn_moves(st, 0)
+    play_skill(st, "phase_walk")
+    assert [r + 1, c] in legal_pawn_moves(st, 0, ignore_walls=True)
+    apply_pawn_move(st, [r + 1, c])
+    assert not st.phase_buff[0]
+
+
+def test_phase_walk_endpoint_returns_phased_moves():
+    """回归：打出穿墙后，/legal-moves 须返回无视墙的走位（含被墙挡住的格）。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    c = TestClient(app)
+    r = c.post("/api/games/new", json={"n": 9, "m": 9, "seed": 5})
+    gid = r.json()["id"]
+    st = r.json()["state"]
+    k = st["skill_k"]
+    pr, pc = st["pawns"][0]
+    c.post(f"/api/games/{gid}/skills/select", json={"player": 0, "skills": ["phase_walk"] * k})
+    c.post(f"/api/games/{gid}/skills/select", json={"player": 1, "skills": ["phase_walk"] * k})
+    # 先手用南行封住自己，再把轮次还给先手
+    assert c.post(f"/api/games/{gid}/moves/wall",
+                  json={"wr": pr + 1, "wc": pc, "orientation": "H", "kind": "straight", "arm": None}).status_code == 200
+    s1 = c.get(f"/api/games/{gid}").json()["state"]
+    q = s1["pawns"][1]
+    assert c.post(f"/api/games/{gid}/moves/pawn", json={"to": [q[0] - 1, q[1]]}).status_code == 200
+    # 穿墙前：南行格不在合法走位里
+    assert [pr + 1, pc] not in c.get(f"/api/games/{gid}/legal-moves").json()["moves"]
+    assert c.post(f"/api/games/{gid}/skills/play", json={"skill": "phase_walk"}).status_code == 200
+    j = c.get(f"/api/games/{gid}/legal-moves").json()
+    assert j["phased"] is True
+    assert [pr + 1, pc] in j["moves"]
+    # 穿墙走过去
+    assert c.post(f"/api/games/{gid}/moves/pawn", json={"to": [pr + 1, pc]}).status_code == 200
+
+
+def test_l_remodel_grants_l_wall():
+    st = _started()
+    st.hands[0] = {"l_remodel": 1}
+    ok, _ = is_wall_legal(st, 0, Wall(wr=3, wc=3, kind="L", arm="NW"))
+    assert not ok  # 未打出技能前无放置权
+    play_skill(st, "l_remodel")
+    assert st.l_bonus[0] == 1
+    left = st.walls_left[0]
+    apply_wall(st, Wall(wr=3, wc=3, kind="L", arm="NW"))
+    assert st.l_bonus[0] == 0 and st.walls_left[0] == left - 1
+
+
+def test_free_wall():
+    st = _started()
+    st.hands[0] = {"free_wall": 1}
+    st.walls_left[0] = 0  # 无存量也能放
+    play_skill(st, "free_wall")
+    apply_wall(st, Wall(wr=2, wc=0, orientation="H"))
+    assert st.walls_left[0] == 0 and not st.free_buff[0]
+
+
+def test_make_sand_restrictions():
+    st = _started()
+    st.hands[0] = {"make_sand": 3}
+    r, c = st.pawns[0]
+    with pytest.raises(ValueError):
+        play_skill(st, "make_sand", [r, c])  # 棋子格
+    with pytest.raises(ValueError):
+        play_skill(st, "make_sand", [st.n - 1, st.goal_A[0]])  # 获胜点
+    dead = next(iter(st.deads))
+    with pytest.raises(ValueError):
+        play_skill(st, "make_sand", list(dead))  # 死点
+    # 合法落点：中部空格
+    target = None
+    for rr in range(2, st.n - 2):
+        for cc in range(st.m):
+            if (rr, cc) not in st.deads and (rr, cc) not in st.sands and [rr, cc] not in st.pawns:
+                target = [rr, cc]
+                break
+        if target:
+            break
+    play_skill(st, "make_sand", target)
+    assert tuple(target) in st.sands
+    with pytest.raises(ValueError):
+        play_skill(st, "make_sand", target)  # 同一序列第二张被拒
 
 
 def test_surround_wins_for_victim():
