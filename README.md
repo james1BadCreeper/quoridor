@@ -60,7 +60,7 @@ npm run dev   # 访问 http://127.0.0.1:5173（/api 已代理到 8000 端口）
 `GET /api/games/{id}/export` 返回完整棋谱（带历史，仅回放/复盘用）。前端导出的回放文件为
 `quoridor-replay/1` 格式（头部静态＋每步增量事件＋变化字段差分），体积约为全快照的 1%。
 
-**阶段零：出题与选边。** 出题输入 `{"phase":"goals","m":m}`，
+**阶段零：出题与选边。** 出题输入 `{"phase":"goals","n":..,"m":..,"deads":..,"sands":..}`（预览地形，与开局一致），
 输出 `{"goal_A":[...],"goal_B":[...]}`（各 m//2 列）；选边输入地图与 A/B，
 输出 `{"side":"first"}` 或 `{"side":"second"}`。向导里 AI 出题/选边走
 `POST /api/ai/goals`、`POST /api/ai/side`；`POST /api/ai/match` 用 `chooser` 指定出题方。

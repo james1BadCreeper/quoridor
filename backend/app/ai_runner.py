@@ -200,11 +200,13 @@ def run_ai(aid: str, payload: dict, timeout: float = 5) -> dict:
         raise AIError(f"AI 输出不是合法 json：{lines[-1][:200]}")
 
 
-def ai_goals(aid: str, m: int, timeout: float = 5) -> tuple[list[int], list[int]]:
-    """AI 出题：跑出题阶段容器，返回校验过的 A/B 列集（非法出题抛 AIError）。"""
+def ai_goals(aid: str, n: int, m: int, deads: set, sands: set, timeout: float = 5) -> tuple[list[int], list[int]]:
+    """AI 出题：跑出题阶段容器，返回校验过的 A/B 列集（非法出题抛 AIError）。
+    出题能看到预览地形（与建局地形一致，见 /api/map/preview）。"""
     if not 9 <= m <= 15:
         raise AIError(f"m 须在 [9,15] 内：{m}")
-    out = run_ai(aid, {"phase": "goals", "m": m}, timeout)
+    out = run_ai(aid, {"phase": "goals", "n": n, "m": m,
+                       "deads": sorted(deads), "sands": sorted(sands)}, timeout)
     try:
         return engine.validate_goal_sets(m, out["goal_A"], out["goal_B"])
     except (ValueError, KeyError, TypeError) as e:
@@ -313,18 +315,21 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
     chooser_side = chooser if chooser != "random" else rng.choice(["white", "black"])
     chooser_idx = 0 if chooser_side == "white" else 1
     chooser_id, picker_id = sides[chooser_idx], sides[1 - chooser_idx]
+    # 地形与目标列无关：先预览地形（与随后建局的地形一致），出题/选边都看真地图
+    _pv = engine.new_game(n=n, m=m, seed=seed,
+                          goal_A=list(range(m // 2)), goal_B=list(range(m // 2)))
+    terrain_d, terrain_s = _pv.deads, _pv.sands
     try:
         if chooser_id == "random":
             goal_A, goal_B = engine.pick_goal_sets(m, rng)
         else:
             ensure_image(chooser_id)
-            goal_A, goal_B = ai_goals(chooser_id, m, timeout)
+            goal_A, goal_B = ai_goals(chooser_id, n, m, terrain_d, terrain_s, timeout)
         if picker_id == "random":
             picker_side = rng.choice(["first", "second"])
         else:
             ensure_image(picker_id)
-            # 出题时的地图（死点/流沙）尚未生成：先按空地图选边，开局后再补全
-            picker_side = ai_side(picker_id, n, m, set(), set(), goal_A, goal_B, timeout)
+            picker_side = ai_side(picker_id, n, m, terrain_d, terrain_s, goal_A, goal_B, timeout)
     except AIError as e:
         raise AIError(f"出题/选边失败：{e}")
     st = engine.new_game(n=n, m=m, seed=seed, goal_A=goal_A, goal_B=goal_B)

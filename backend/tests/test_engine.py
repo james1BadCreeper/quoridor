@@ -393,3 +393,13 @@ def test_quicksand_bonus_allows_wall():
 def test_normal_snapshot_has_no_sand_bonus():
     st = _started()
     assert st.to_ai_dict()["sand_bonus"] is False
+
+
+def test_preview_terrain_matches_final_game():
+    """预览地形（哑目标列）与随后同 n/m/seed 建局的地形一致：地形与目标列无关。"""
+    for seed in (1, 7, 42):
+        pv = new_game(n=11, m=13, seed=seed, goal_A=list(range(6)), goal_B=list(range(6)))
+        real = new_game(n=11, m=13, seed=seed, goal_A=[0, 2, 4, 6, 8, 10],
+                        goal_B=[1, 3, 5, 7, 9, 11])
+        assert sorted(pv.deads) == sorted(real.deads)
+        assert sorted(pv.sands) == sorted(real.sands)

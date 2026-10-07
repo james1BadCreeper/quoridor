@@ -222,3 +222,15 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color:
 .history > div.hl { color: var(--text); border-left: 3px solid var(--accent); }
 .history > div.side0 { border-right: 3px solid rgba(251, 113, 133, .55); }
 .history > div.side1 { border-right: 3px solid rgba(96, 165, 250, .55); }
+
+/* 地形预览（向导出题/选边/选牌） */
+.maprev { margin: 10px 0; }
+.pvgrid { display: grid; gap: 2px; width: fit-content; max-width: 100%; }
+.pvcell {
+  width: 16px; height: 16px; border-radius: 3px; background: #22304f;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-style: normal; color: #0c1220; line-height: 1;
+}
+.pvcell.dead { background: #05080f; color: var(--bad); border: 1px solid var(--line); }
+.pvcell.sand { background: var(--sand); }
+.maprev .legend { display: flex; gap: 6px; align-items: center; margin: 6px 0 0; }

@@ -38,8 +38,10 @@ export const apiAiUpload = async (file) => {
 };
 export const apiExternalMove = (gid, aid) =>
   req(`/api/games/${gid}/ai-external-move`, json({ aid }));
-export const apiAiGoals = (aid, m) =>
-  req('/api/ai/goals', json({ aid, m })).then((j) => ({ goal_A: j.goal_A, goal_B: j.goal_B }));
+export const apiMapPreview = (n, m, seed) =>
+  req('/api/map/preview', json({ n, m, seed }));
+export const apiAiGoals = (aid, { n, m, deads, sands }) =>
+  req('/api/ai/goals', json({ aid, n, m, deads, sands })).then((j) => ({ goal_A: j.goal_A, goal_B: j.goal_B }));
 export const apiAiSide = (aid, { n, m, deads, sands, goal_A, goal_B }) =>
   req('/api/ai/side', json({ aid, n, m, deads, sands, goal_A, goal_B })).then((j) => j.side);
 

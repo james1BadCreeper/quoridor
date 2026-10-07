@@ -184,3 +184,24 @@ def test_double_requires_two_actions(tmp_path, monkeypatch):
     r = c.post(f"/api/games/{gid}/ai-external-move", json={"aid": aid, "timeout": 10})
     assert r.status_code == 400 and "两步" in r.text, r.text
     subprocess.run(["docker", "rmi", ai_runner.image_tag(aid)], capture_output=True, timeout=60)
+
+
+def test_map_preview_matches_new_game():
+    """preview 接口地形与同参建局一致（无需 docker）。"""
+    c = TestClient(app)
+    r = c.post("/api/map/preview", json={"n": 11, "m": 13, "seed": 42})
+    assert r.status_code == 200, r.text
+    t = r.json()
+    g = c.post("/api/games/new", json={"n": 11, "m": 13, "seed": 42,
+                                       "goal_A": [0, 2, 4, 6, 8, 10],
+                                       "goal_B": [1, 3, 5, 7, 9, 11]})
+    assert g.status_code == 200, g.text
+    st = g.json()["state"]
+    assert sorted(t["deads"]) == sorted(st["deads"])
+    assert sorted(t["sands"]) == sorted(st["sands"])
+
+
+def test_map_preview_rejects_bad_size():
+    c = TestClient(app)
+    r = c.post("/api/map/preview", json={"n": 5, "m": 9, "seed": 1})
+    assert r.status_code == 400

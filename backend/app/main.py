@@ -25,6 +25,7 @@ from .models import (
     AIGoalsRequest,
     AISideRequest,
     ExternalMoveRequest,
+    MapPreviewRequest,
     MatchRequest,
     NewGameRequest,
     PawnMoveRequest,
@@ -217,11 +218,25 @@ def run_match(req: MatchRequest) -> dict:
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/map/preview")
+def map_preview(req: MapPreviewRequest) -> dict:
+    """预览本局地形：与随后同 n/m/seed 建局的地形完全一致
+    （地形只与出生点/首末行保护格有关，与目标列无关，故可用哑目标列先行生成）。"""
+    try:
+        st = new_game(n=req.n, m=req.m, seed=req.seed,
+                      goal_A=list(range(req.m // 2)), goal_B=list(range(req.m // 2)))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"n": st.n, "m": st.m, "deads": sorted(st.deads), "sands": sorted(st.sands)}
+
+
 @app.post("/api/ai/goals")
 def post_ai_goals(req: AIGoalsRequest) -> dict:
     """AI 出题：返回校验过的 A/B 获胜列集（非法出题报 400）。"""
     try:
-        a, b = ai_runner.ai_goals(req.aid, req.m, req.timeout)
+        a, b = ai_runner.ai_goals(req.aid, req.n, req.m,
+                                  {tuple(x) for x in req.deads},
+                                  {tuple(x) for x in req.sands}, req.timeout)
     except AIError as e:
         raise HTTPException(400, str(e))
     return {"aid": req.aid, "goal_A": a, "goal_B": b}

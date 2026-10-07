@@ -70,13 +70,24 @@ int main() {
     }
 
     // ===== 阶段零之一：出题（选 A/B 获胜列集） =====
-    // 选边在后、执子未知，故出对称题：A=B=中间 k 列，把选择留给选边阶段。
+    // 选边在后、执子未知，故出对称题：取整列死点/流沙代价最小的 k 列
+    // （死点计 2、流沙计 1，代价相同取中间列），把选择留给选边阶段。
     if (getStr(j, "phase", "") == "goals") {
-        int m = getInt(j, "m", 9);
-        int k = m / 2;
-        int start = (m - k) / 2;
+        Board b = parseBoard(j);  // 出题输入只有 n/m/deads/sands，无棋子亦可解析
+        int k = b.m / 2;
+        std::vector<std::pair<int, int>> cost;  // (代价, 列)
+        for (int c = 0; c < b.m; ++c) {
+            int v = 0;
+            for (auto &d : b.deads) if (d.second == c) v += 2;
+            for (auto &s : b.sands) if (s.second == c) v += 1;
+            cost.push_back({v * 1000 + std::abs(c * 2 + 1 - b.m), c});
+        }
+        std::sort(cost.begin(), cost.end());
+        std::vector<int> picks;
+        for (int i = 0; i < k; ++i) picks.push_back(cost[i].second);
+        std::sort(picks.begin(), picks.end());
         json cols = json::array();
-        for (int c = start; c < start + k; ++c) cols.push_back(c);
+        for (int c : picks) cols.push_back(c);
         std::cout << json({{"goal_A", cols}, {"goal_B", cols}}).dump();
         return 0;
     }

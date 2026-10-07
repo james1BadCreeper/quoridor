@@ -59,8 +59,17 @@ class MatchRequest(BaseModel):
 
 class AIGoalsRequest(BaseModel):
     aid: str
+    n: int = Field(default=9, description="行数（地形预览用）")
     m: int = Field(description="列数，AI 出 A/B 列集")
+    deads: list[list[int]] = Field(default_factory=list, description="死点（预览地形）")
+    sands: list[list[int]] = Field(default_factory=list, description="流沙（预览地形）")
     timeout: float = 5
+
+
+class MapPreviewRequest(BaseModel):
+    n: int = Field(description="行数（向导已定稿）")
+    m: int = Field(description="列数（向导已定稿）")
+    seed: int = Field(description="随机种子（向导已锁定，建局沿用）")
 
 
 class AISideRequest(BaseModel):

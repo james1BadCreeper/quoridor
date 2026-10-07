@@ -1,6 +1,6 @@
 // 开局向导：完整规则流程 —— 随机出题人 → 选 A/B 列集 → 另一方选边 → 选技能卡。
-import { useEffect, useRef, useState } from 'react';
-import { apiAiGoals, apiAiList, apiAiSide, apiAiUpload, apiSkills, skillK } from '../api.js';
+import { useEffect, useState } from 'react';
+import { apiAiGoals, apiAiList, apiAiSide, apiAiUpload, apiMapPreview, apiSkills, skillK } from '../api.js';
 
 const FALLBACK_SKILLS = {  l_remodel: { name: '改造', desc: '获得 1 次 L 形墙放置权' },
   double_move: { name: '连续行动', desc: '本回合连续移动两次' },
@@ -28,6 +28,29 @@ const randomGoals = (m) => {
   const pick = () => shuffled([...Array(m).keys()]).slice(0, k).sort((x, y) => x - y);
   return { a: pick(), b: pick() }; // A、B 相互独立，可相交、可留空列
 };
+
+// 地形预览：出题/选边/选牌共用（与建局地形一致，种子已锁定）
+function MapPreview({ n, m, deads, sands }) {
+  const deadSet = new Set((deads || []).map(([r, c]) => `${r},${c}`));
+  const sandSet = new Set((sands || []).map(([r, c]) => `${r},${c}`));
+  const cells = [];
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < m; c++) {
+      const k = `${r},${c}`;
+      const cls = deadSet.has(k) ? 'dead' : sandSet.has(k) ? 'sand' : '';
+      const mark = deadSet.has(k) ? '✕' : sandSet.has(k) ? '~' : '';
+      cells.push(<i key={k} className={`pvcell ${cls}`}>{mark}</i>);
+    }
+  }
+  return (
+    <div className="maprev">
+      <div className="pvgrid" style={{ gridTemplateColumns: `repeat(${m}, 1fr)` }}>{cells}</div>
+      <p className="muted small legend">
+        <i className="pvcell dead">✕</i> 死点 <i className="pvcell sand">~</i> 流沙（本局地形，开局不变）
+      </p>
+    </div>
+  );
+}
 
 function ColPicker({ m, goalA, goalB, k, phase, setPhase, onToggle, onRandom, onClear, chooserName }) {
   const cols = [...Array(m).keys()];
@@ -78,11 +101,9 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   const [aiIds, setAiIds] = useState(['builtin-random', 'builtin-random']); // AI 席位来源（后端 aid）
   const [aiOptions, setAiOptions] = useState([]); // 后端默认 + 已上传 AI 列表
   const [uploading, setUploading] = useState(false);
-  const [aiBusy, setAiBusy] = useState(false); // 等待 AI 出题/选边
+  const [aiBusy, setAiBusy] = useState(false); // 等待地形预览 / AI 出题/选边
   const [aiPickedSide, setAiPickedSide] = useState(false); // 容器 AI 是否已选过边
-  // AI 出题/选边结果在向导会话内粘住：后退重进直接复用，人类无权让 AI 重选
-  const aiCache = useRef(null); // {chooser, m, chooserAid, pickerAid, goalA, goalB, side}
-  const sameCols = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const [terrain, setTerrain] = useState(null); // 锁定的本局地形 {n, m, deads, sands}
   // 定稿后的开局参数
   const [fm, setFm] = useState(9);
   const [fn, setFn] = useState(9);
@@ -130,49 +151,40 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   function toSetup2() {
     const nn = n === '' ? randInt(9, 15) : Math.min(15, Math.max(9, Number(n) || 9));
     const mm = m === '' ? randInt(9, 15) : Math.min(15, Math.max(9, Number(m) || 9));
+    const sd = seed === '' ? randInt(1, 1 << 30) : Number(seed);
     const ch = Math.random() < 0.5 ? 0 : 1;
-    setFn(nn); setFm(mm); setChooser(ch);
-    const chooserAid = ptypes[ch] === 'ai' ? aiIds[ch] : null;
-    const pickerAid = ptypes[1 - ch] === 'ai' ? aiIds[1 - ch] : null;
-    const cached = aiCache.current;
-    // 同一配置后退重进：AI 结果直接复用，不重调
-    if (cached && cached.chooser === ch && cached.m === mm &&
-        cached.chooserAid === chooserAid && cached.pickerAid === pickerAid) {
-      if (chooserAid) { setGoalA(cached.goalA); setGoalB(cached.goalB); }
-      if (pickerAid && cached.side && sameCols(goalA, cached.goalA) && sameCols(goalB, cached.goalB)) {
-        setSide(cached.side); setAiPickedSide(true);
-      } else if (pickerAid) { setSide(null); setAiPickedSide(false); }
-      setStep(1);
-      return;
-    }
-    aiCache.current = { chooser: ch, m: mm, chooserAid, pickerAid, goalA: [], goalB: [], side: null };
+    // 定稿并锁定：尺寸/种子就此冻结，地形预览与随后建局完全一致
+    setFn(nn); setFm(mm); setSeed(String(sd)); setChooser(ch);
     (async () => {
-      // 出题：人类手动 / AI 调后端出题容器
-      if (ptypes[ch] === 'human') { setGoalA([]); setGoalB([]); }
-      else {
-        setAiBusy(true);
-        try {
-          const g = await apiAiGoals(aiIds[ch], mm);
-          setGoalA(g.goal_A); setGoalB(g.goal_B);
-          if (aiCache.current) { aiCache.current.goalA = g.goal_A; aiCache.current.goal_B = g.goal_B; }
-        } catch (e) { alert(`AI 出题失败，已改用随机：${e.message}`); const g = randomGoals(mm); setGoalA(g.a); setGoalB(g.b);
-          if (aiCache.current) { aiCache.current.goalA = g.a; aiCache.current.goalB = g.b; } }
-        finally { setAiBusy(false); }
-      }
+      setAiBusy(true);
+      try {
+        const t = await apiMapPreview(nn, mm, sd);
+        const terr = { n: t.n, m: t.m, deads: t.deads, sands: t.sands };
+        setTerrain(terr);
+        // 出题能看到真地图：人类手动 / AI 调后端出题容器
+        if (ptypes[ch] === 'human') { setGoalA([]); setGoalB([]); }
+        else {
+          try {
+            const g = await apiAiGoals(aiIds[ch], terr);
+            setGoalA(g.goal_A); setGoalB(g.goal_B);
+          } catch (e) { alert(`AI 出题失败，已改用随机：${e.message}`); const g = randomGoals(mm); setGoalA(g.a); setGoalB(g.b); }
+        }
+      } catch (e) { alert(`地形预览失败：${e.message}`); return; }
+      finally { setAiBusy(false); }
       setSide(null); // 选边在步骤 2 完成（人类点选 / AI 调后端）
       setAiPickedSide(false);
       setStep(1);
     })();
   }
 
-  // 进入选边步骤时，AI 自动选边一次
+  // 进入选边步骤时，AI 自动选边一次（带真地图）
   useEffect(() => {
-    if (step !== 2) return;
+    if (step !== 2 || !terrain) return;
     const p = picker;
     if (ptypes[p] !== 'ai' || aiPickedSide || aiBusy) return;
     setAiBusy(true);
-    apiAiSide(aiIds[p], { n: fn, m: fm, deads: [], sands: [], goal_A: goalA, goal_B: goalB })
-      .then((s) => { setSide(s); setAiPickedSide(true); if (aiCache.current) aiCache.current.side = s; })
+    apiAiSide(aiIds[p], { n: terrain.n, m: terrain.m, deads: terrain.deads, sands: terrain.sands, goal_A: goalA, goal_B: goalB })
+      .then((s) => { setSide(s); setAiPickedSide(true); })
       .catch((e) => { alert(`AI 选边失败，已改用随机：${e.message}`); setSide(Math.random() < 0.5 ? 'first' : 'second'); setAiPickedSide(true); })
       .finally(() => setAiBusy(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,7 +221,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
     // 座位映射：先手 seat0、后手 seat1 各由哪位参与者担任
     const seatOf = side === 'first' ? [picker, chooser] : [chooser, picker];
     onCreate({
-      n: fn, m: fm,
+      n: terrain?.n ?? fn, m: terrain?.m ?? fm,
       seed: seed === '' ? null : Number(seed),
       goal_A: goalA, goal_B: goalB,
       participants: [{ name: names[0], type: ptypes[0] }, { name: names[1], type: ptypes[1] }],
@@ -253,7 +265,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
           <div className="grid2">
             <label>行 n<input value={n} onChange={(e) => setN(e.target.value)} placeholder="空 = 9~15 随机" /></label>
             <label>列 m<input value={m} onChange={(e) => setM(e.target.value)} placeholder="空 = 9~15 随机" /></label>
-            <label>随机种子<input value={seed} onChange={(e) => setSeed(e.target.value)} placeholder="可选" /></label>
+            <label>随机种子<input value={seed} onChange={(e) => setSeed(e.target.value)} placeholder="空 = 随机并锁定" /></label>
           </div>
           <div className="grid2">
             {[0, 1].map((i) => (
@@ -297,7 +309,9 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
       {step === 1 && (
         <div>
           <p>本局棋盘 <b>{fn}×{fm}</b>（k = m//2 = {k}），出题人是 <b className={sideCls(names[chooser])}>{names[chooser]}</b>
-            （{ptypes[chooser] === 'human' ? '人类出题' : 'AI 出题'}），应战人是 <b>{names[picker]}</b>。</p>
+            （{ptypes[chooser] === 'human' ? '人类出题' : 'AI 出题'}），应战人是 <b>{names[picker]}</b>。
+            出题前请先看地形：死点/流沙密集的列不适合做获胜列。</p>
+          {terrain && <MapPreview n={terrain.n} m={terrain.m} deads={terrain.deads} sands={terrain.sands} />}
           {ptypes[chooser] === 'human' ? (
             <ColPicker m={fm} goalA={goalA} goalB={goalB} k={k} phase={phase} setPhase={setPhase}
               onToggle={toggleCol}
@@ -310,7 +324,6 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
             </div>
           )}
           <div className="rowbtns">
-            <button className="btn ghost" onClick={() => setStep(0)}>上一步</button>
             <button className="btn primary" disabled={!goalsReady} onClick={() => setStep(2)}>
               下一步：选边
             </button>
@@ -320,7 +333,8 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
 
       {step === 2 && (
         <div>
-          <p>应战人 <b className={sideCls(names[picker])}>{names[picker]}</b> 请选择：</p>
+          <p>应战人 <b className={sideCls(names[picker])}>{names[picker]}</b> 请选择（结合地形看哪边好走）：</p>
+          {terrain && <MapPreview n={terrain.n} m={terrain.m} deads={terrain.deads} sands={terrain.sands} />}
           <div className="sidecards">
             <button className={`sidecard${side === 'first' ? ' sel' : ''}`} onClick={() => ptypes[picker] === 'human' && setSide('first')}>
               <b>先手 + 集合 A</b>
@@ -339,7 +353,6 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
             </div>
           )}
           <div className="rowbtns">
-            <button className="btn ghost" onClick={() => setStep(1)}>上一步</button>
             <button className="btn primary" disabled={!side} onClick={() => {
               // AI 席位先随机一版预览（可重随），人类席位保留已选
               setSkillPicks([0, 1].map((i) => (
@@ -355,7 +368,9 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
 
       {step === 3 && (
         <div>
-          <p>本局每人选 <b className="hl">{kk} 张</b>技能卡（F(n,m)=max(2, v//5)，可重复；AI 的牌赛前对人类不可见）。</p>
+          <p>本局每人选 <b className="hl">{kk} 张</b>技能卡（F(n,m)=max(2, v//5)，可重复；AI 的牌赛前对人类不可见）。
+            结合地形选牌：流沙多可带穿墙/连续行动，死点多可带改造/免费墙开路。</p>
+          {terrain && <MapPreview n={terrain.n} m={terrain.m} deads={terrain.deads} sands={terrain.sands} />}
           {[0, 1].map((i) => (
             <div className="pseat" key={i} style={{ marginBottom: 10 }}>
               <b>{names[i]}（{ptypes[i] === 'human' ? '人类自选' : 'AI 随机'}）：{ptypes[i] === 'human' ? `${skillPicks[i].length}/${kk}` : `开局随机 ${kk} 张`}</b>
@@ -385,7 +400,6 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
             </div>
           ))}
           <div className="rowbtns">
-            <button className="btn ghost" onClick={() => setStep(2)}>上一步</button>
             <button className="btn primary" disabled={!skillsReady} onClick={start}>开始对局</button>
           </div>
         </div>
