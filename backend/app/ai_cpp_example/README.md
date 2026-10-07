@@ -10,7 +10,7 @@ AI 是一个程序：从 stdin 读入一个 json，向 stdout 输出一行决策
 | `ai_example.cpp` | 贪心示例（最短路＋挡墙＋技能），照抄结构即可 |
 | `ai_random.cpp` | 随机示例（合法性优先，弱策略也必须输出合法） |
 | `ai_common.hpp` | 公共库，见下 |
-| `json.hpp` | nlohmann/json 单头文件，打包时**须一起打进 zip** |
+| `json.hpp` | nlohmann/json 单头文件，上传时**无需打包**（后端自动提供；自带同名文件则以你的为准） |
 | `Dockerfile[.random]`／`build.sh`／`run.sh` | 容器内编译＋沙箱运行脚本 |
 
 ## `ai_common.hpp` 用法
@@ -147,7 +147,7 @@ history 条目（`type` 区分）：
 ./build.sh                            # 容器内编译两个示例
 ./run.sh < kifu.json                  # 沙箱跑贪心示例（`./run.sh random` 跑随机示例）
 echo '{"phase":"select","skill_k":2}' | ./run.sh   # 选牌自测
-zip my_ai.zip my_ai.cpp ai_common.hpp json.hpp
+zip my_ai.zip my_ai.cpp               # 只需打包你自己的源码（ai_common.hpp/json.hpp 后端自动提供）
 curl -F "file=@my_ai.zip" http://127.0.0.1:8000/api/ai/upload        # → aid
 curl -X POST http://127.0.0.1:8000/api/ai/match \
   -H 'Content-Type: application/json' -d '{"white":"<aid>","black":"random","seed":7}'

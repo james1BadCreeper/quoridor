@@ -89,8 +89,16 @@ def save_ai_zip(data: bytes, filename: str) -> str:
 
 
 def build_ai(aid: str, timeout: int = BUILD_TIMEOUT) -> tuple[bool, str]:
-    """在容器内编译 AI 源码，生成运行镜像。返回 (成功, 日志尾)。"""
+    """在容器内编译 AI 源码，生成运行镜像。返回 (成功, 日志尾)。
+
+    上传 zip 无需包含 ai_common.hpp / json.hpp：缺失时后端自动补入模板版本；
+    若作者自带同名文件，以作者的为准。
+    """
     d = _aid_dir(aid)
+    src = d / "src"
+    for f in BUILTIN_FILES:
+        if not (src / f).exists():
+            (src / f).write_bytes((EXAMPLE_DIR / f).read_bytes())
     (d / "Dockerfile").write_text(
         f"FROM {BASE_IMAGE}\n"
         "WORKDIR /ai\n"

@@ -154,3 +154,15 @@ def test_export_viewer():
     v1 = c.get(f"/api/games/{gid}/export?viewer=1").json()
     assert v1["hands"] == [{}, {"phase_walk": 2}]
     assert c.get(f"/api/games/{gid}/export?viewer=2").status_code == 400
+
+
+@needs_docker
+def test_upload_without_common_headers(tmp_path, monkeypatch):
+    """上传 zip 无需自带 ai_common.hpp / json.hpp，后端自动补入。"""
+    monkeypatch.setattr(ai_runner, "AI_DIR", tmp_path)
+    c = TestClient(app)
+    payload = make_zip({"my_ai.cpp": (EXAMPLE_DIR / "ai_random.cpp").read_bytes()})
+    r = c.post("/api/ai/upload", files={"file": ("ai.zip", payload, "application/zip")})
+    assert r.status_code == 200, r.text
+    assert r.json()["built"] is True
+    subprocess.run(["docker", "rmi", ai_runner.image_tag(r.json()["aid"])], capture_output=True, timeout=60)
