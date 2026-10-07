@@ -58,7 +58,7 @@ npm run dev   # 访问 http://127.0.0.1:5173（/api 已代理到 8000 端口）
 
 棋谱分两种：传给 AI 的是精简快照（只有当前状态，字段见 `backend/app/ai_cpp_example/README.md`）；
 `GET /api/games/{id}/export` 返回完整棋谱（带历史，仅回放/复盘用）。前端导出的回放文件为
-`quoridor-replay/1` 格式（头部静态＋每步增量事件），体积约为全快照的 5%。
+`quoridor-replay/1` 格式（头部静态＋每步增量事件＋变化字段差分），体积约为全快照的 1%。
 
 **阶段零：出题与选边。** 出题输入 `{"phase":"goals","m":m}`，
 输出 `{"goal_A":[...],"goal_B":[...]}`（各 m//2 列）；选边输入地图与 A/B，

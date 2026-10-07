@@ -194,7 +194,7 @@ export default function App() {
     if (!snaps.length) return;
     const doc = buildReplay(snaps, { seatNames, seatTypes, seatAIs, redSeat });
     if (!doc) return;
-    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(doc)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `kifu_${gid ?? 'local'}.json`;

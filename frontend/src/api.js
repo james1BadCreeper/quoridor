@@ -92,8 +92,10 @@ export const REPLAY_FORMAT = 'quoridor-replay/1';
 
 const DYNAMIC_KEYS = ['turn', 'pawns', 'walls_left', 'hands', 'l_bonus', 'phase_buff',
   'free_buff', 'must_move', 'seq_skill_used', 'bonus_moves', 'winner', 'win_reason'];
-// 首步存全量（含 walls/sands），后续只存增量（墙/流沙由事件累积重建）
+// 首步存全量（含 walls/sands），后续只存增量与变化字段（墙/流沙由事件累积重建，
+// 其余字段与上一步相同则省略，解析时合并——旧全量文件同样可读）
 const FULL_KEYS = [...DYNAMIC_KEYS, 'walls', 'sands'];
+const eqJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export function buildReplay(snaps, meta) {
   if (!snaps.length) return null;
@@ -104,10 +106,14 @@ export function buildReplay(snaps, meta) {
     pawns0: first.pawns, walls_left0: first.walls_left,
     hands0: first.hands, l_bonus0: first.l_bonus, meta,
   };
+  let prev = null;
   const plies = snaps.map((s, i) => {
     const prevLen = i === 0 ? 0 : snaps[i - 1].history.length;
     const dyn = { events: (s.history || []).slice(prevLen) };
-    for (const k of (i === 0 ? FULL_KEYS : DYNAMIC_KEYS)) dyn[k] = s[k];
+    for (const k of (i === 0 ? FULL_KEYS : DYNAMIC_KEYS)) {
+      if (i === 0 || k === 'turn' || k === 'pawns' || !eqJson(s[k], prev[k])) dyn[k] = s[k];
+    }
+    prev = s;
     return dyn;
   });
   return { format: REPLAY_FORMAT, header, plies };
@@ -119,6 +125,12 @@ export function parseReplay(j) {
   // 兼容首步全量缺 walls/sands 的旧增量文件（回退为空开局累积）
   let walls = [...(j.plies[0]?.walls ?? [])], sands = [...(j.plies[0]?.sands ?? [])];
   let history = [];
+  // 动态基线：首步全量，不足补头部初值；后续与上一步合并
+  let base = {
+    turn: 0, pawns: H.pawns0, walls_left: H.walls_left0, hands: H.hands0, l_bonus: H.l_bonus0,
+    phase_buff: [false, false], free_buff: [false, false],
+    must_move: false, seq_skill_used: false, bonus_moves: 0, winner: null, win_reason: null,
+  };
   const snaps = j.plies.map((p, i) => {
     if (i > 0) {
       for (const e of p.events || []) {
@@ -126,15 +138,16 @@ export function parseReplay(j) {
         if (e.type === 'skill' && e.skill === 'make_sand' && e.to) sands.push(e.to);
       }
     }
+    base = { ...base, ...p };
     for (const e of p.events || []) history.push(e);
     return {
       n: H.n, m: H.m, walls_total: H.walls_total, deads: H.deads,
       goal_A: H.goal_A, goal_B: H.goal_B, skill_k: H.skill_k,
-      pawns: p.pawns ?? H.pawns0, turn: p.turn, walls: [...walls], walls_left: p.walls_left ?? H.walls_left0,
-      sands: [...sands], hands: p.hands ?? H.hands0, l_bonus: p.l_bonus ?? H.l_bonus0,
-      phase_buff: p.phase_buff, free_buff: p.free_buff,
-      must_move: p.must_move, seq_skill_used: p.seq_skill_used,
-      bonus_moves: p.bonus_moves, winner: p.winner, win_reason: p.win_reason,
+      pawns: base.pawns, turn: base.turn, walls: [...walls], walls_left: base.walls_left,
+      sands: [...sands], hands: base.hands, l_bonus: base.l_bonus,
+      phase_buff: base.phase_buff, free_buff: base.free_buff,
+      must_move: base.must_move, seq_skill_used: base.seq_skill_used,
+      bonus_moves: base.bonus_moves, winner: base.winner, win_reason: base.win_reason,
       history: [...history], started: true, skills_picked: [true, true],
     };
   });
