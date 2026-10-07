@@ -1,13 +1,15 @@
-"""FastAPI 入口：对局创建、走子/放墙、合法动作、随机 AI、棋谱导入导出。"""
+"""FastAPI 入口：对局创建、走子/放墙、合法动作、随机 AI、外部 AI 上传对战、棋谱导入导出。"""
 
 from __future__ import annotations
 
 import random
 import uuid
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import ai_runner
+from .ai_runner import AIError
 from .engine import (
     SKILLS,
     GameState,
@@ -25,6 +27,8 @@ from .engine import (
 )
 from .models import (
     AIRequest,
+    ExternalMoveRequest,
+    MatchRequest,
     NewGameRequest,
     PawnMoveRequest,
     SkillPlayRequest,
@@ -202,6 +206,73 @@ def post_skill_play(gid: str, req: SkillPlayRequest) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"id": gid, "state": st.to_dict()}
+
+
+@app.post("/api/ai/upload")
+def upload_ai(file: UploadFile = File(...)) -> dict:
+    """上传 AI 源码 zip（只收 .cpp/.cc/.c/.h/.hpp），在 docker 容器内编译成运行镜像。"""
+    try:
+        aid = ai_runner.save_ai_zip(file.file.read(), file.filename or "ai.zip")
+    except AIError as e:
+        raise HTTPException(400, str(e))
+    try:
+        ok, log = ai_runner.build_ai(aid)
+    except AIError as e:
+        raise HTTPException(400, f"aid={aid}，{e}")
+    return {"aid": aid, "built": ok, "log": log}
+
+
+@app.get("/api/ai/list")
+def list_ais() -> dict:
+    """已上传的 AI 一览（含是否已编译）。"""
+    return {"ais": ai_runner.list_ais()}
+
+
+@app.post("/api/games/{gid}/ai-external-move")
+def post_external_move(gid: str, req: ExternalMoveRequest) -> dict:
+    """已上传 AI 走一步（人机对战、AI 对 AI 演示用）；决策非法/超时报 400。"""
+    st = GAMES.get(gid)
+    if st is None:
+        raise HTTPException(404, "对局不存在")
+    if st.winner is not None:
+        raise HTTPException(400, "对局已结束")
+    if not st.started:
+        raise HTTPException(400, "双方选完技能卡后方可行动")
+    try:
+        decision = ai_runner.run_ai(req.aid, st.to_dict(), req.timeout)
+        played = None
+        if not isinstance(decision, dict):
+            raise AIError(f"决策须为 json 对象：{str(decision)[:200]}")
+        if "skill" in decision:
+            try:
+                play_skill(st, decision["skill"], decision.get("to"))
+            except ValueError as e:
+                raise AIError(f"打出手牌非法（{decision.get('skill')}）：{e}")
+            played = {"skill": decision["skill"], "to": decision.get("to")}
+        action = decision.get("action", decision)
+        if not isinstance(action, dict) or action.get("type") == "skill":
+            raise AIError(f"行动非法：{str(action)[:200]}")
+        if action.get("type") == "move":
+            apply_pawn_move(st, action["to"])
+        elif action.get("type") == "wall":
+            apply_wall(st, Wall.from_dict(action["wall"]))
+        else:
+            raise AIError(f"未知行动类型：{action.get('type')}")
+    except AIError as e:
+        raise HTTPException(400, str(e))
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(400, f"行动非法：{e}")
+    return {"id": gid, "action": action, "skill": played, "state": st.to_dict()}
+
+
+@app.post("/api/ai/match")
+def run_match(req: MatchRequest) -> dict:
+    """AI 对战：双方各为 "random" 或已编译 aid；犯规/超时者判负，超步数判平局。"""
+    try:
+        return ai_runner.play_match(req.white, req.black, req.n, req.m,
+                                    req.seed, req.max_plies, req.timeout)
+    except AIError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/games/{gid}/export")

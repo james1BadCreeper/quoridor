@@ -274,33 +274,33 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
 
       {step === 3 && (
         <div>
-          <p>本局每人选 <b className="hl">{kk} 张</b>技能卡（F(n,m)=max(2, v//5)，可重复；同机对战手牌互可见）。</p>
+          <p>本局每人选 <b className="hl">{kk} 张</b>技能卡（F(n,m)=max(2, v//5)，可重复；AI 的牌赛前对人类不可见）。</p>
           {[0, 1].map((i) => (
             <div className="pseat" key={i} style={{ marginBottom: 10 }}>
-              <b>{names[i]}（{ptypes[i] === 'human' ? '人类自选' : 'AI 随机'}）：{skillPicks[i].length}/{kk}</b>
-              {Object.entries(skillDefs).map(([id, d]) => {
-                const count = skillPicks[i].filter((s) => s === id).length;
-                return (
-                  <div className="skillrow" key={id}>
-                    <span><b>{d.name}</b> <span className="muted small">{d.desc}</span></span>
-                    <span>
-                      {ptypes[i] === 'human' ? (
-                        <>
+              <b>{names[i]}（{ptypes[i] === 'human' ? '人类自选' : 'AI 随机'}）：{ptypes[i] === 'human' ? `${skillPicks[i].length}/${kk}` : `开局随机 ${kk} 张`}</b>
+              {ptypes[i] === 'human' ? (
+                <>
+                  {Object.entries(skillDefs).map(([id, d]) => {
+                    const count = skillPicks[i].filter((s) => s === id).length;
+                    return (
+                      <div className="skillrow" key={id}>
+                        <span><b>{d.name}</b> <span className="muted small">{d.desc}</span></span>
+                        <span>
                           <button className="btn ghost mini" onClick={() => adjustPick(i, id, -1)}>−</button>
                           <b> {count} </b>
                           <button className="btn ghost mini" onClick={() => adjustPick(i, id, 1)}>＋</button>
-                        </>
-                      ) : (
-                        <b> ×{count} </b>
-                      )}
-                    </span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                  <div className="rowbtns">
+                    <button className="btn ghost" onClick={() => setPick(i, randomPicks())}>随机填充</button>
+                    <button className="btn ghost" onClick={() => setPick(i, [])}>清空</button>
                   </div>
-                );
-              })}
-              <div className="rowbtns">
-                <button className="btn ghost" onClick={() => setPick(i, randomPicks())}>随机填充</button>
-                {ptypes[i] === 'human' && <button className="btn ghost" onClick={() => setPick(i, [])}>清空</button>}
-              </div>
+                </>
+              ) : (
+                <p className="muted small">AI 席位开局时由后端随机选牌，赛前不向人类展示牌面（同机双人对战除外，双方皆为人类时互可见）。</p>
+              )}
             </div>
           ))}
           <div className="rowbtns">

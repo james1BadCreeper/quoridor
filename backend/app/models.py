@@ -42,3 +42,18 @@ class SkillRandomRequest(BaseModel):
 class SkillPlayRequest(BaseModel):
     skill: str
     to: list[int] | None = None  # 仅流沙陷阱使用
+
+
+class ExternalMoveRequest(BaseModel):
+    aid: str  # 已上传并编译的 AI id
+    timeout: float = Field(default=5, description="AI 单步运行超时（秒）")
+
+
+class MatchRequest(BaseModel):
+    white: str = Field(default="random", description='"random" 或 aid（先手）')
+    black: str = Field(default="random", description='"random" 或 aid（后手）')
+    n: int | None = None
+    m: int | None = None
+    seed: int | None = None
+    max_plies: int = Field(default=800, description="步数上限，超限判平局")
+    timeout: float = Field(default=5, description="AI 单步运行超时（秒）")

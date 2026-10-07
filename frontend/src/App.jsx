@@ -206,6 +206,9 @@ export default function App() {
   }
 
   const turnIsAI = state && seatTypes[state.turn] === 'ai';
+  // 手牌可见性：对战进行中人类只能看自己方；回放/终局复盘/导入回放/双 AI 观战时全可见
+  const spectate = seatTypes[0] !== 'human' && seatTypes[1] !== 'human';
+  const revealAll = spectate || isReplay || !live;
 
   return (
     <div className="app">
@@ -317,26 +320,34 @@ export default function App() {
 
             <div className="card">
               <h3>技能卡{shown.seq_skill_used ? '（本序列已打出过）' : ''}</h3>
-              <p className="muted small">行动前可打出一张，不占轮次；连续行动序列中最多一张。同机对战手牌互可见。</p>
+              <p className="muted small">行动前可打出一张，不占轮次；连续行动序列中最多一张。对战中 AI 手牌对人类隐藏。</p>
               {[0, 1].map((seat) => {
                 const hand = shown.hands?.[seat] ?? {};
                 const ids = Object.keys(hand);
                 const mine = live && shown.turn === seat;
+                const hidden = !revealAll && seatTypes[seat] !== 'human';
+                const total = ids.reduce((s, id) => s + hand[id], 0);
                 return (
                   <div className="hand" key={seat}>
                     <div className={`seatname p${seat}`}>{seatNames[seat]}（{seat === 0 ? '先手' : '后手'}）</div>
-                    {ids.length === 0 && <span className="muted small">无手牌</span>}
-                    {ids.map((id) => (
-                      <span className="skillchip" key={id} title={skillDefs[id]?.desc ?? id}>
-                        {skillDefs[id]?.name ?? id}×{hand[id]}
-                        <button className="btn ghost mini"
-                          disabled={!mine || busy || shown.seq_skill_used}
-                          title={mine ? (shown.seq_skill_used ? '本序列已打出过' : '行动前打出') : '轮到该方时打出'}
-                          onClick={() => doPlaySkill(id)}>
-                          打出
-                        </button>
-                      </span>
-                    ))}
+                    {hidden ? (
+                      <span className="muted small">AI 手牌 ×{total}（对战中隐藏）</span>
+                    ) : (
+                      <>
+                        {ids.length === 0 && <span className="muted small">无手牌</span>}
+                        {ids.map((id) => (
+                          <span className="skillchip" key={id} title={skillDefs[id]?.desc ?? id}>
+                            {skillDefs[id]?.name ?? id}×{hand[id]}
+                            <button className="btn ghost mini"
+                              disabled={!mine || busy || shown.seq_skill_used}
+                              title={mine ? (shown.seq_skill_used ? '本序列已打出过' : '行动前打出') : '轮到该方时打出'}
+                              onClick={() => doPlaySkill(id)}>
+                              打出
+                            </button>
+                          </span>
+                        ))}
+                      </>
+                    )}
                   </div>
                 );
               })}
