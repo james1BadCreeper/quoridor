@@ -7,8 +7,6 @@ import {
   sandLocalLegal, wallLocalLegal,
 } from './api.js';
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 // 历史记录中文格式化
 function fmtHist(h, seatNames, skillDefs) {
   const who = `${seatNames[h.player]}(${h.player === 0 ? '先手' : '后手'})`;
@@ -38,13 +36,17 @@ export default function App() {
   const [mode, setMode] = useState('move');
   const [wallSel, setWallSel] = useState({ kind: 'straight', orientation: 'H', arm: 'NW' });
   const [ghost, setGhost] = useState(null);
-  const [seatNames, setSeatNames] = useState(['先手', '后手']);
+  const [seatNames, setSeatNames] = useState(['红', '蓝']);
   const [seatTypes, setSeatTypes] = useState(['human', 'human']);
+  const [redSeat, setRedSeat] = useState(0); // 红方所在席位（颜色跟身份：红恒红、蓝恒蓝）
+  // 身份色号：红方 0（红系）、蓝方 1（蓝系），替代原来的席位色号
+  const idc = (seat) => (seat === redSeat ? 0 : 1);
   const [seatAIs, setSeatAIs] = useState(['builtin-random', 'builtin-random']); // AI 席位来源（后端 aid）
   const [autoAI, setAutoAI] = useState(false);
   const [busy, setBusy] = useState(false);
   const [skillDefs, setSkillDefs] = useState({});
   const [sandMode, setSandMode] = useState(false); // 流沙陷阱选格模式
+  const histRef = useRef(null); // 棋谱列表，用于自动跟随最新
 
   useEffect(() => {
     apiSkills().then(setSkillDefs).catch(() => {});
@@ -55,11 +57,18 @@ export default function App() {
   const typesRef = useRef(seatTypes); typesRef.current = seatTypes;
   const aisRef = useRef(seatAIs); aisRef.current = seatAIs;
   const gidRef = useRef(gid); gidRef.current = gid;
-  const autoRef = useRef(false);
 
   const shown = snaps.length ? snaps[Math.min(step, snaps.length - 1)] : null;
   const isReplay = snaps.length > 0 && step < snaps.length - 1;
   const live = gid && state && state.winner == null && !isReplay;
+  // 人类只能在自己（人类席位）回合行动；AI 席位只能按“AI 行棋 / AI 走到底”
+  const humanTurn = !!live && seatTypes[state.turn] === 'human';
+  const turnIsAI = !!live && seatTypes[state.turn] === 'ai';
+
+  // 非回放时棋谱列表自动滚到底部跟随最新
+  useEffect(() => {
+    if (!isReplay && histRef.current) histRef.current.scrollTop = histRef.current.scrollHeight;
+  }, [snaps.length, isReplay]);
 
   // 墙所属方（按 history 中放墙顺序对应 walls 数组）
   const wallOwners = (() => {
@@ -74,8 +83,8 @@ export default function App() {
   }
 
   function appendSnap(st) {
-    setSnaps((prev) => [...prev, st]);
-    setStep(snaps.length); // snaps 为追加前数组，其长度即新末尾下标
+    // 函数式更新 step，避免连走循环中闭包拿到过期 snaps 导致进度条不跟随
+    setSnaps((prev) => { setStep(prev.length); return [...prev, st]; });
     setState(st);
     setGhost(null);
     refreshLegal(gidRef.current, st);
@@ -100,6 +109,7 @@ export default function App() {
       setGid(j.id);
       setSeatNames(names);
       setSeatTypes(types);
+      setRedSeat(cfg.seatOf.indexOf(cfg.participants.findIndex((p) => p.name === '红')));
       setSeatAIs(cfg.seatAIs ?? ['builtin-random', 'builtin-random']);
       setSnaps([cur]);
       setStep(0);
@@ -112,14 +122,14 @@ export default function App() {
   }
 
   async function doMove(r, c) {
-    if (!live) return;
+    if (!humanTurn) return;
     setBusy(true);
     try { appendSnap((await apiMovePawn(gid, [r, c])).state); }
     catch (e) { alert(e.message); } finally { setBusy(false); }
   }
 
   async function doPlaceWall(wall) {
-    if (!live) return;
+    if (!humanTurn) return;
     const chk = wallLocalLegal(state, state.turn, wall);
     if (!chk.ok) { alert(`此处不可放墙：${chk.reason}`); return; }
     setBusy(true);
@@ -133,7 +143,7 @@ export default function App() {
   }
 
   async function doPlaySkill(skill, to) {
-    if (!live || busy) return;
+    if (!humanTurn || busy) return;
     if (skill === 'make_sand' && !to) { setSandMode(true); setMode('move'); return; }
     if (to) {
       const chk = sandLocalLegal(state, to[0], to[1]);
@@ -162,24 +172,26 @@ export default function App() {
   }
 
   async function aiToEnd() {
-    if (autoRef.current) { autoRef.current = false; return; }
-    autoRef.current = true;
+    // 开关式连走：开启后每当轮到 AI 便自动走一步；人类回合人类自己走，走完 AI 自动续
+    if (autoAI) { setAutoAI(false); return; }
+    if (!live) return;
     setAutoAI(true);
-    try {
-      for (let i = 0; i < 500 && autoRef.current; i++) {
-        const s = stateRef.current;
-        if (!s || s.winner != null) break;
-        if (typesRef.current[s.turn] !== 'ai') break;
-        if (!gidRef.current) break;
-        try { await aiOnce(); } catch (e) { alert(e.message); break; }
-        await sleep(350);
-      }
-    } finally { autoRef.current = false; setAutoAI(false); }
   }
+
+  // 连走驱动：开启且活局且轮到 AI 时延迟走一步（人机/双 AI 通用，终局自动关闭）
+  useEffect(() => {
+    if (autoAI && state && state.winner != null) { setAutoAI(false); return; }
+    if (!autoAI || !live || !turnIsAI) return;
+    const t = setTimeout(() => {
+      aiOnce().catch((e) => { setAutoAI(false); alert(e.message); });
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoAI, live, turnIsAI, step]);
 
   function exportKifu() {
     if (!state) return;
-    const blob = new Blob([JSON.stringify({ state, snaps, meta: { seatNames, seatTypes, seatAIs } }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ state, snaps, meta: { seatNames, seatTypes, seatAIs, redSeat } }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `kifu_${gid ?? 'local'}.json`;
@@ -195,7 +207,7 @@ export default function App() {
         setSnaps(j.snaps);
         setStep(0);
         setState(j.snaps[j.snaps.length - 1]);
-        if (j.meta) { setSeatNames(j.meta.seatNames); setSeatTypes(j.meta.seatTypes); setSeatAIs(j.meta.seatAIs ?? ['builtin-random', 'builtin-random']); }
+        if (j.meta) { setSeatNames(j.meta.seatNames); setSeatTypes(j.meta.seatTypes); setSeatAIs(j.meta.seatAIs ?? ['builtin-random', 'builtin-random']); if (j.meta.redSeat === 0 || j.meta.redSeat === 1) setRedSeat(j.meta.redSeat); }
         setGid(null);
         setWizardOpen(false);
       } else {
@@ -211,7 +223,6 @@ export default function App() {
     e.target.value = '';
   }
 
-  const turnIsAI = state && seatTypes[state.turn] === 'ai';
   // 手牌可见性：对战进行中人类只能看自己方；回放/终局复盘/导入回放/双 AI 观战时全可见
   const spectate = seatTypes[0] !== 'human' && seatTypes[1] !== 'human';
   const revealAll = spectate || isReplay || !live;
@@ -235,8 +246,8 @@ export default function App() {
         <div className="main">
           <section className="card boardcard">
             <div className="statusbar">
-              <span className={`turnbadge p${shown.turn}`}>
-                轮到 {seatNames[shown.turn]}（{shown.turn === 0 ? '先手●' : '后手○'}）
+              <span className={`turnbadge p${idc(shown.turn)}`}>
+                轮到 {seatNames[shown.turn]}（{shown.turn === 0 ? '先手' : '后手'}）
               </span>
               {shown.bonus_moves > 0 && <span className="pill warn">流沙：同一人继续行动</span>}
               {isReplay && <span className="pill">回放中 {step + 1}/{snaps.length}</span>}
@@ -245,17 +256,18 @@ export default function App() {
               )}
             </div>
             <div className="wallsline">
-              <span className="wcount p0">● 墙 {shown.walls_left[0]}（L券 {shown.l_bonus?.[0] ?? 0}）</span>
-              <span className="wcount p1">○ 墙 {shown.walls_left[1]}（L券 {shown.l_bonus?.[1] ?? 0}）</span>
+              <span className={`wcount p${idc(0)}`}>先手·{seatNames[0]} 墙 {shown.walls_left[0]}（L券 {shown.l_bonus?.[0] ?? 0}）</span>
+              <span className={`wcount p${idc(1)}`}>后手·{seatNames[1]} 墙 {shown.walls_left[1]}（L券 {shown.l_bonus?.[1] ?? 0}）</span>
               {shown.must_move && <span className="pill warn">连续行动：只能走子</span>}
               {shown.phase_buff?.[shown.turn] && <span className="pill">穿墙就绪</span>}
               {shown.free_buff?.[shown.turn] && <span className="pill">免费墙就绪</span>}
-              <span className="muted small">A=[{shown.goal_A.join(',')}] → 先手底线绿标　B=[{shown.goal_B.join(',')}] → 后手顶线蓝标</span>
+              <span className="muted small">A=[{shown.goal_A.join(',')}] 先手底线　B=[{shown.goal_B.join(',')}] 后手顶线</span>
             </div>
-            <Board st={shown} legal={live && mode === 'move' && !sandMode ? legal.moves : []}
-              phased={live && legal.phased}
-              mode={mode} wallSel={wallSel} ghost={ghost} wallOwners={wallOwners}
-              interactive={!!live}
+            <Board st={shown} legal={humanTurn && mode === 'move' && !sandMode ? legal.moves : []}
+              phased={humanTurn && legal.phased} redSeat={redSeat}
+              mode={mode} wallSel={wallSel} ghost={ghost}
+              wallOwners={wallOwners.map((s) => (s === 0 || s === 1 ? (s === redSeat ? 0 : 1) : s))}
+              interactive={!!humanTurn}
               onCellClick={(r, c) => doMove(r, c)}
               onSlotHover={(w) => setGhost({ wall: w, ...wallLocalLegal(state, state.turn, w) })}
               onSlotLeave={() => setGhost(null)}
@@ -271,8 +283,8 @@ export default function App() {
             <div className="legend">
               <span><i className="sw death" />死点不可进</span>
               <span><i className="sw sand" />流沙：对方连走两次</span>
-              <span><i className="sw ga" />先手目标</span>
-              <span><i className="sw gb" />后手目标</span>
+              <span><i className="sw gr" />红方目标</span>
+              <span><i className="sw bl" />蓝方目标</span>
             </div>
           </section>
 
@@ -330,12 +342,12 @@ export default function App() {
               {[0, 1].map((seat) => {
                 const hand = shown.hands?.[seat] ?? {};
                 const ids = Object.keys(hand);
-                const mine = live && shown.turn === seat;
+                const mine = humanTurn && shown.turn === seat;
                 const hidden = !revealAll && seatTypes[seat] !== 'human';
                 const total = ids.reduce((s, id) => s + hand[id], 0);
                 return (
                   <div className="hand" key={seat}>
-                    <div className={`seatname p${seat}`}>{seatNames[seat]}（{seat === 0 ? '先手' : '后手'}）</div>
+                    <div className={`seatname p${idc(seat)}`}>{seatNames[seat]}（{seat === 0 ? '先手' : '后手'}）</div>
                     {hidden ? (
                       <span className="muted small">AI 手牌 ×{total}（对战中隐藏）</span>
                     ) : (
@@ -370,9 +382,9 @@ export default function App() {
 
             <div className="card">
               <h3>棋谱（{shown.history?.length ?? 0} 手）</h3>
-              <div className="history">
+              <div className="history" ref={histRef}>
                 {(shown.history || []).map((h, i) => (
-                  <div key={i} className={i === (shown.history.length - 1) ? 'hl' : ''}>
+                  <div key={i} className={`${i === (shown.history.length - 1) ? 'hl' : ''} side${idc(h.player)}`}>
                     {i + 1}. {fmtHist(h, seatNames, skillDefs)}
                   </div>
                 ))}

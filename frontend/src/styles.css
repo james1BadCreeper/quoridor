@@ -153,8 +153,8 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color:
 .legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 4px; margin-right: 5px; vertical-align: -1px; }
 .sw.death { background: #020617; border: 1px solid #475569; }
 .sw.sand { background: var(--sand); }
-.sw.ga { background: var(--goalA); }
-.sw.gb { background: var(--goalB); }
+.sw.gr { background: var(--p0); }
+.sw.bl { background: var(--p1); }
 
 /* 棋盘 SVG：高度受视口限制，大棋盘自动等比缩小，保证一屏内完整可见 */
 .qboard { width: 100%; height: auto; display: block; margin: 0 auto; max-height: calc(100vh - 240px); }
@@ -162,10 +162,10 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color:
 .q-cell { fill: #21304f; stroke: #0a1122; stroke-width: 1; transition: fill .12s; }
 .q-cell.is-legal { fill: #134e4a; }
 .q-cell.is-dead { fill: #020617; }
-.q-cell.is-goalA { stroke: var(--goalA); stroke-width: 2.5; }
-.q-cell.is-goalB { stroke: var(--goalB); stroke-width: 2.5; }
-.q-goalmarkA { fill: var(--goalA); opacity: .9; }
-.q-goalmarkB { fill: var(--goalB); opacity: .9; }
+.q-cell.is-goalR { stroke: var(--p0); stroke-width: 2.5; }
+.q-cell.is-goalB { stroke: var(--p1); stroke-width: 2.5; }
+.q-goalmarkR { fill: var(--p0); opacity: .9; }
+.q-goalmarkB { fill: var(--p1); opacity: .9; }
 .q-deadmark line { stroke: #64748b; stroke-width: 3; }
 .q-sandmark { color: #92400e; }
 .q-dot { fill: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
@@ -220,3 +220,5 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color:
 .history::-webkit-scrollbar { display: none; }
 .history > div { padding: 5px 9px; border-radius: 7px; background: #0e1628; color: var(--muted); }
 .history > div.hl { color: var(--text); border-left: 3px solid var(--accent); }
+.history > div.side0 { border-right: 3px solid rgba(251, 113, 133, .55); }
+.history > div.side1 { border-right: 3px solid rgba(96, 165, 250, .55); }

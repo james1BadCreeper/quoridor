@@ -39,7 +39,7 @@ function slotWall(wallSel, a, b) {
 }
 
 export default function Board({
-  st, legal, phased, mode, wallSel, ghost, wallOwners,
+  st, legal, phased, mode, wallSel, ghost, wallOwners, redSeat,
   interactive, onCellClick, onSlotHover, onSlotLeave, onSlotClick,
   sandMode, onSandClick,
 }) {
@@ -100,15 +100,22 @@ export default function Board({
           const x = GAP + c * P, y = GAP + r * P;
           const dead = has(st.deads, r, c);
           const sand = has(st.sands, r, c);
-          const gA = r === st.n - 1 && st.goal_A.includes(c);
-          const gB = r === 0 && st.goal_B.includes(c);
+          // 目标点颜色跟身份：红方格（红的目标）红标，蓝方格蓝标
+          const gR = (r === st.n - 1 && st.goal_A.includes(c) && redSeat === 0) ||
+            (r === 0 && st.goal_B.includes(c) && redSeat === 1);
+          const gB = (r === st.n - 1 && st.goal_A.includes(c) && redSeat !== 0) ||
+            (r === 0 && st.goal_B.includes(c) && redSeat !== 1);
           const isLegal = interactive && mode === 'move' && legalSet.has(`${r},${c}`);
+          // 棋子颜色跟身份（红恒红、蓝恒蓝），字标先/后跟席位
+          const pawnSide = st.pawns[0][0] === r && st.pawns[0][1] === c ? 0
+            : st.pawns[1][0] === r && st.pawns[1][1] === c ? 1 : -1;
+          const pawnIdc = pawnSide < 0 ? 0 : (pawnSide === redSeat ? 0 : 1);
           return (
             <g key={`${r},${c}`}>
               <rect x={x} y={y} width={CELL} height={CELL} rx={7}
-                className={`q-cell${dead ? ' is-dead' : ''}${sand ? ' is-sand' : ''}${gA ? ' is-goalA' : ''}${gB ? ' is-goalB' : ''}${isLegal ? ' is-legal' : ''}`}
+                className={`q-cell${dead ? ' is-dead' : ''}${sand ? ' is-sand' : ''}${gR ? ' is-goalR' : ''}${gB ? ' is-goalB' : ''}${isLegal ? ' is-legal' : ''}`}
                 fill={sand ? 'url(#sandg)' : undefined} />
-              {gA && <path d={`M ${x + CELL / 2 - 6} ${y + 6} l 6 8 l 6 -8 z`} className="q-goalmarkA" />}
+              {gR && <path d={`M ${x + CELL / 2 - 6} ${y + 6} l 6 8 l 6 -8 z`} className="q-goalmarkR" />}
               {gB && <path d={`M ${x + CELL / 2 - 6} ${y + CELL - 6} l 6 -8 l 6 8 z`} className="q-goalmarkB" />}
               {dead && (
                 <g className="q-deadmark" strokeLinecap="round">
@@ -124,17 +131,11 @@ export default function Board({
                 </g>
               )}
               {isLegal && <circle cx={x + CELL / 2} cy={y + CELL / 2} r={6} className={`q-dot${phased ? ' phased' : ''}`} />}
-              {/* 棋子 */}
-              {st.pawns[0][0] === r && st.pawns[0][1] === c && (
-                <g className={st.turn === 0 && st.winner == null ? 'q-pawnturn' : ''}>
-                  <circle cx={x + CELL / 2} cy={y + CELL / 2} r={14} fill="url(#pawn0)" className="q-pawn p0" />
-                  <text x={x + CELL / 2} y={y + CELL / 2 + 5} textAnchor="middle" className="q-pawntext">先</text>
-                </g>
-              )}
-              {st.pawns[1][0] === r && st.pawns[1][1] === c && (
-                <g className={st.turn === 1 && st.winner == null ? 'q-pawnturn' : ''}>
-                  <circle cx={x + CELL / 2} cy={y + CELL / 2} r={14} fill="url(#pawn1)" className="q-pawn p1" />
-                  <text x={x + CELL / 2} y={y + CELL / 2 + 5} textAnchor="middle" className="q-pawntext">后</text>
+              {/* 棋子：颜色跟身份，字标先/后跟席位 */}
+              {pawnSide >= 0 && (
+                <g className={st.turn === pawnSide && st.winner == null ? 'q-pawnturn' : ''}>
+                  <circle cx={x + CELL / 2} cy={y + CELL / 2} r={14} fill={`url(#pawn${pawnIdc})`} className={`q-pawn p${pawnIdc}`} />
+                  <text x={x + CELL / 2} y={y + CELL / 2 + 5} textAnchor="middle" className="q-pawntext">{pawnSide === 0 ? '先' : '后'}</text>
                 </g>
               )}
               {/* 点击层：走子高亮格，或流沙陷阱选格 */}

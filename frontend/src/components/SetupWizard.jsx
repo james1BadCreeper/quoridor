@@ -1,5 +1,5 @@
 // 开局向导：完整规则流程 —— 随机出题人 → 选 A/B 列集 → 另一方选边 → 选技能卡。
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiAiGoals, apiAiList, apiAiSide, apiAiUpload, apiSkills, skillK } from '../api.js';
 
 const FALLBACK_SKILLS = {  l_remodel: { name: '改造', desc: '获得 1 次 L 形墙放置权' },
@@ -9,8 +9,8 @@ const FALLBACK_SKILLS = {  l_remodel: { name: '改造', desc: '获得 1 次 L �
   free_wall: { name: '免费墙', desc: '下一次放墙不消耗存量' },
 };
 
-// 参与者名字着色：含“红”用红色，其余保持默认高亮蓝
-const nameCls = (n) => (n && n.includes('红') ? 'hl-red' : 'hl');
+// 颜色表示身份（红恒红、蓝恒蓝）；参与双方固定为红/蓝，不可改名
+const sideCls = (n) => (n === '红' ? 'hl-red' : 'hl');
 
 const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
@@ -34,7 +34,7 @@ function ColPicker({ m, goalA, goalB, k, phase, setPhase, onToggle, onRandom, on
   return (
     <div>
       <p className="muted">
-        出题人 <b className={nameCls(chooserName)}>{chooserName}</b> 正在出题：A、B 各选 {k} 列，相互独立
+        出题人 <b className={sideCls(chooserName)}>{chooserName}</b> 正在出题：A、B 各选 {k} 列，相互独立
         （可以重叠，也可以留空列）。直接点列即可，选满一集后会自动切到另一集。
         A = 先手的获胜列，B = 后手的获胜列。
       </p>
@@ -73,13 +73,16 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   const [n, setN] = useState('');
   const [m, setM] = useState('');
   const [seed, setSeed] = useState('');
-  const [names, setNames] = useState(['红方', '蓝方']);
+  const [names] = useState(['红', '蓝']); // 双方固定为红/蓝，不可改名
   const [ptypes, setPtypes] = useState(['human', 'human']);
   const [aiIds, setAiIds] = useState(['builtin-random', 'builtin-random']); // AI 席位来源（后端 aid）
   const [aiOptions, setAiOptions] = useState([]); // 后端默认 + 已上传 AI 列表
   const [uploading, setUploading] = useState(false);
   const [aiBusy, setAiBusy] = useState(false); // 等待 AI 出题/选边
   const [aiPickedSide, setAiPickedSide] = useState(false); // 容器 AI 是否已选过边
+  // AI 出题/选边结果在向导会话内粘住：后退重进直接复用，人类无权让 AI 重选
+  const aiCache = useRef(null); // {chooser, m, chooserAid, pickerAid, goalA, goalB, side}
+  const sameCols = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
   // 定稿后的开局参数
   const [fm, setFm] = useState(9);
   const [fn, setFn] = useState(9);
@@ -129,6 +132,20 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
     const mm = m === '' ? randInt(9, 15) : Math.min(15, Math.max(9, Number(m) || 9));
     const ch = Math.random() < 0.5 ? 0 : 1;
     setFn(nn); setFm(mm); setChooser(ch);
+    const chooserAid = ptypes[ch] === 'ai' ? aiIds[ch] : null;
+    const pickerAid = ptypes[1 - ch] === 'ai' ? aiIds[1 - ch] : null;
+    const cached = aiCache.current;
+    // 同一配置后退重进：AI 结果直接复用，不重调
+    if (cached && cached.chooser === ch && cached.m === mm &&
+        cached.chooserAid === chooserAid && cached.pickerAid === pickerAid) {
+      if (chooserAid) { setGoalA(cached.goalA); setGoalB(cached.goalB); }
+      if (pickerAid && cached.side && sameCols(goalA, cached.goalA) && sameCols(goalB, cached.goalB)) {
+        setSide(cached.side); setAiPickedSide(true);
+      } else if (pickerAid) { setSide(null); setAiPickedSide(false); }
+      setStep(1);
+      return;
+    }
+    aiCache.current = { chooser: ch, m: mm, chooserAid, pickerAid, goalA: [], goalB: [], side: null };
     (async () => {
       // 出题：人类手动 / AI 调后端出题容器
       if (ptypes[ch] === 'human') { setGoalA([]); setGoalB([]); }
@@ -137,7 +154,9 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
         try {
           const g = await apiAiGoals(aiIds[ch], mm);
           setGoalA(g.goal_A); setGoalB(g.goal_B);
-        } catch (e) { alert(`AI 出题失败，已改用随机：${e.message}`); const g = randomGoals(mm); setGoalA(g.a); setGoalB(g.b); }
+          if (aiCache.current) { aiCache.current.goalA = g.goal_A; aiCache.current.goal_B = g.goal_B; }
+        } catch (e) { alert(`AI 出题失败，已改用随机：${e.message}`); const g = randomGoals(mm); setGoalA(g.a); setGoalB(g.b);
+          if (aiCache.current) { aiCache.current.goalA = g.a; aiCache.current.goalB = g.b; } }
         finally { setAiBusy(false); }
       }
       setSide(null); // 选边在步骤 2 完成（人类点选 / AI 调后端）
@@ -153,7 +172,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
     if (ptypes[p] !== 'ai' || aiPickedSide || aiBusy) return;
     setAiBusy(true);
     apiAiSide(aiIds[p], { n: fn, m: fm, deads: [], sands: [], goal_A: goalA, goal_B: goalB })
-      .then((s) => { setSide(s); setAiPickedSide(true); })
+      .then((s) => { setSide(s); setAiPickedSide(true); if (aiCache.current) aiCache.current.side = s; })
       .catch((e) => { alert(`AI 选边失败，已改用随机：${e.message}`); setSide(Math.random() < 0.5 ? 'first' : 'second'); setAiPickedSide(true); })
       .finally(() => setAiBusy(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -239,8 +258,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
           <div className="grid2">
             {[0, 1].map((i) => (
               <div className="pseat" key={i}>
-                <label>参与者 {i === 0 ? '甲' : '乙'}<input value={names[i]}
-                  onChange={(e) => setNames(names.map((v, j) => (j === i ? e.target.value : v)))} /></label>
+                <b className={sideCls(names[i])}>参与者{names[i]}方</b>
                 <select value={ptypes[i]}
                   onChange={(e) => setPtypes(ptypes.map((v, j) => (j === i ? e.target.value : v)))}>
                   <option value="human">人类</option>
@@ -278,7 +296,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
 
       {step === 1 && (
         <div>
-          <p>本局棋盘 <b>{fn}×{fm}</b>（k = m//2 = {k}），出题人是 <b className={nameCls(names[chooser])}>{names[chooser]}</b>
+          <p>本局棋盘 <b>{fn}×{fm}</b>（k = m//2 = {k}），出题人是 <b className={sideCls(names[chooser])}>{names[chooser]}</b>
             （{ptypes[chooser] === 'human' ? '人类出题' : 'AI 出题'}），应战人是 <b>{names[picker]}</b>。</p>
           {ptypes[chooser] === 'human' ? (
             <ColPicker m={fm} goalA={goalA} goalB={goalB} k={k} phase={phase} setPhase={setPhase}
@@ -289,9 +307,6 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
           ) : (
             <div>
               <p className="muted">AI 已出题：A = [{goalA.join(', ')}]，B = [{goalB.join(', ')}]</p>
-              <button className="btn ghost" onClick={() => { const g = randomGoals(fm); setGoalA(g.a); setGoalB(g.b); }}>
-                重新随机
-              </button>
             </div>
           )}
           <div className="rowbtns">
@@ -305,7 +320,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
 
       {step === 2 && (
         <div>
-          <p>应战人 <b className={nameCls(names[picker])}>{names[picker]}</b> 请选择：</p>
+          <p>应战人 <b className={sideCls(names[picker])}>{names[picker]}</b> 请选择：</p>
           <div className="sidecards">
             <button className={`sidecard${side === 'first' ? ' sel' : ''}`} onClick={() => ptypes[picker] === 'human' && setSide('first')}>
               <b>先手 + 集合 A</b>
@@ -321,7 +336,6 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
               {aiBusy
                 ? <span className="muted">AI 正在选边…</span>
                 : <span className="muted">AI 已选边：{side === 'first' ? '先手 + A' : '后手 + B'}</span>}
-              <button className="btn ghost" disabled={aiBusy} onClick={() => setAiPickedSide(false)}>重新选择</button>
             </div>
           )}
           <div className="rowbtns">
