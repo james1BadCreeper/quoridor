@@ -39,6 +39,10 @@ export const apiAiUpload = async (file) => {
 };
 export const apiExternalMove = (gid, aid) =>
   req(`/api/games/${gid}/ai-external-move`, json({ aid }));
+export const apiAiGoals = (aid, m) =>
+  req('/api/ai/goals', json({ aid, m })).then((j) => ({ goal_A: j.goal_A, goal_B: j.goal_B }));
+export const apiAiSide = (aid, { n, m, deads, sands, goal_A, goal_B }) =>
+  req('/api/ai/side', json({ aid, n, m, deads, sands, goal_A, goal_B })).then((j) => j.side);
 
 // —— 单面墙阻断边（镜像 engine.wall_edges），用于悬停预览的本地合法性判断 ——
 function edgesOf(w) {

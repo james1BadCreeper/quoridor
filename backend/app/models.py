@@ -50,10 +50,28 @@ class ExternalMoveRequest(BaseModel):
 
 
 class MatchRequest(BaseModel):
-    white: str = Field(default="random", description='"random" 或 aid（先手）')
-    black: str = Field(default="random", description='"random" 或 aid（后手）')
+    white: str = Field(default="random", description='"random" 或 aid（先手方参与者）')
+    black: str = Field(default="random", description='"random" 或 aid（后手方参与者）')
     n: int | None = None
     m: int | None = None
     seed: int | None = None
     max_plies: int = Field(default=800, description="步数上限，超限判平局")
     timeout: float = Field(default=5, description="AI 单步运行超时（秒）")
+    chooser: str = Field(default="random", description="出题方：white/black/random（抛硬币），另一方选边")
+
+
+class AIGoalsRequest(BaseModel):
+    aid: str
+    m: int = Field(description="列数，AI 出 A/B 列集")
+    timeout: float = 5
+
+
+class AISideRequest(BaseModel):
+    aid: str
+    n: int = 9
+    m: int = 9
+    deads: list[list[int]] = Field(default_factory=list)
+    sands: list[list[int]] = Field(default_factory=list)
+    goal_A: list[int] = Field(default_factory=list)
+    goal_B: list[int] = Field(default_factory=list)
+    timeout: float = 5

@@ -58,6 +58,28 @@ int main() {
         return 0;
     }
 
+    // ===== 阶段零之一：出题（A/B 各随机 k 列，相互独立） =====
+    if (getStr(j, "phase", "") == "goals") {
+        int m = getInt(j, "m", 9);
+        int k = m / 2;
+        auto draw = [&]() {
+            std::vector<int> cols;
+            for (int c = 0; c < m; ++c) cols.push_back(c);
+            std::shuffle(cols.begin(), cols.end(), rng());
+            cols.resize(k);
+            std::sort(cols.begin(), cols.end());
+            return cols;
+        };
+        std::cout << json({{"goal_A", draw()}, {"goal_B", draw()}}).dump();
+        return 0;
+    }
+
+    // ===== 阶段零之二：选边（抛硬币） =====
+    if (getStr(j, "phase", "") == "side") {
+        std::cout << json({{"side", rng()() % 2 ? "second" : "first"}}).dump();
+        return 0;
+    }
+
     // ===== 阶段二：行动 =====
     Board b = parseBoard(j);
     auto pickMove = [&](bool phased) {

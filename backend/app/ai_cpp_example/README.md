@@ -33,6 +33,15 @@ Board b = parseBoard(j);   // j 为输入 json，b.turn 即本 AI 执子
 
 注意：json 取值一律用 `getInt/getStr` 或显式转换（nlohmann 的算术转换是 explicit 的）。
 
+## 阶段零：出题与选边（各 1 次）
+
+实现内容：出题方定 A/B 列集，另一方选边（先手+A / 后手+B）。
+
+- 出题输入：`{"phase":"goals","m":m}` → 输出：`{"goal_A":[...],"goal_B":[...]}`（各 m//2 列，范围内、无重复，A/B 可相交）
+- 选边输入：`{"phase":"side","n":..,"m":..,"deads":..,"sands":..,"goal_A":..,"goal_B":..}` → 输出：`{"side":"first"}` 或 `{"side":"second"}`
+
+非法出题/选边判负。出题时只传一方当出题人（`POST /api/ai/match` 的 `chooser`，或向导里 AI 出题席）。
+
 ## 阶段一：选技能卡（1 次）
 
 实现内容：按 `skill_k` 和开局信息挑 k 张牌（可重复，对方不可见）。

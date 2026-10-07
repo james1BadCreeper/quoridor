@@ -127,18 +127,28 @@ def ensure_builtin(aid: str) -> None:
     """物化内置 AI 源码并在缺镜像时编译（与作者上传走同一套容器内编译）。"""
     if aid not in BUILTINS:
         return
+    import hashlib
     main_src, name = BUILTINS[aid]
     src = AI_DIR / aid / "src"
     src.mkdir(parents=True, exist_ok=True)
     # 内置源码与作者模板同源，每次同步，保证镜像与模板一致
-    (src / Path(main_src).name).write_bytes((EXAMPLE_DIR / main_src).read_bytes())
+    blobs = {Path(main_src).name: (EXAMPLE_DIR / main_src).read_bytes()}
     for f in BUILTIN_FILES:
-        (src / f).write_bytes((EXAMPLE_DIR / f).read_bytes())
-    (AI_DIR / aid / "meta.json").write_text(
-        json.dumps({"aid": aid, "name": name, "builtin": True}, ensure_ascii=False),
+        blobs[f] = (EXAMPLE_DIR / f).read_bytes()
+    for fname, data in blobs.items():
+        (src / fname).write_bytes(data)
+    digest = hashlib.sha256(b"".join(blobs[f] for f in sorted(blobs))).hexdigest()[:16]
+    meta_path = AI_DIR / aid / "meta.json"
+    try:
+        built_digest = json.loads(meta_path.read_text(encoding="utf-8")).get("digest")
+    except (OSError, ValueError):
+        built_digest = None
+    meta_path.write_text(
+        json.dumps({"aid": aid, "name": name, "builtin": True, "digest": digest}, ensure_ascii=False),
         encoding="utf-8",
     )
-    if not image_built(aid):
+    # 源码变化或镜像缺失时重编
+    if built_digest != digest or not image_built(aid):
         build_ai(aid)
 
 
@@ -180,6 +190,29 @@ def run_ai(aid: str, payload: dict, timeout: float = 5) -> dict:
         return json.loads(lines[-1])
     except json.JSONDecodeError:
         raise AIError(f"AI 输出不是合法 json：{lines[-1][:200]}")
+
+
+def ai_goals(aid: str, m: int, timeout: float = 5) -> tuple[list[int], list[int]]:
+    """AI 出题：跑出题阶段容器，返回校验过的 A/B 列集（非法出题抛 AIError）。"""
+    if not 9 <= m <= 15:
+        raise AIError(f"m 须在 [9,15] 内：{m}")
+    out = run_ai(aid, {"phase": "goals", "m": m}, timeout)
+    try:
+        return engine.validate_goal_sets(m, out["goal_A"], out["goal_B"])
+    except (ValueError, KeyError, TypeError) as e:
+        raise AIError(f"出题非法：{e}")
+
+
+def ai_side(aid: str, n: int, m: int, deads: set, sands: set,
+            goal_A: list[int], goal_B: list[int], timeout: float = 5) -> str:
+    """AI 选边：跑选边阶段容器，返回 first（先手+A）或 second（后手+B）。"""
+    out = run_ai(aid, {"phase": "side", "n": n, "m": m,
+                       "deads": sorted(deads), "sands": sorted(sands),
+                       "goal_A": goal_A, "goal_B": goal_B}, timeout)
+    side = out.get("side") if isinstance(out, dict) else None
+    if side not in ("first", "second"):
+        raise AIError(f"选边非法（须 first/second）：{str(out)[:200]}")
+    return side
 
 
 def _select_for(side: str, st: engine.GameState, timeout: float) -> list[str]:
@@ -239,13 +272,45 @@ def _step_side(side: str, st: engine.GameState, rng, timeout: float) -> dict:
 
 
 def play_match(white: str, black: str, n: int | None = None, m: int | None = None,
-               seed: int | None = None, max_plies: int = 800, timeout: float = 5) -> dict:
-    """AI 对战：side 为 "random" 或已编译的 aid；犯规/超时/输出非法者判负。"""
+               seed: int | None = None, max_plies: int = 800, timeout: float = 5,
+               chooser: str = "random") -> dict:
+    """AI 对战：side 为 "random" 或已编译的 aid；犯规/超时者判负，超步数判平局。
+
+    出题流程（与前端向导一致）：chooser（white/black/random 之一表出题方，
+    random 即抛硬币）先定 A/B 列集，另一方再选边；出题方为 aid 则跑出题容器，
+    选边方为 aid 则跑选边容器，否则引擎随机。
+    """
     import random as _random
     if max_plies <= 0 or max_plies > 3000:
         raise AIError("max_plies 须在 (0,3000] 内")
-    st = engine.new_game(n=n, m=m, seed=seed)
+    if chooser not in ("white", "black", "random"):
+        raise AIError("chooser 须为 white/black/random")
+    rng = _random.Random(seed)
+    n = n or rng.randint(9, 15)
+    m = m or rng.randint(9, 15)
+    if not (9 <= n <= 15 and 9 <= m <= 15):
+        raise AIError("n, m 必须在 [9,15] 内")
     sides = [white, black]
+    chooser_side = chooser if chooser != "random" else rng.choice(["white", "black"])
+    chooser_idx = 0 if chooser_side == "white" else 1
+    chooser_id, picker_id = sides[chooser_idx], sides[1 - chooser_idx]
+    try:
+        if chooser_id == "random":
+            goal_A, goal_B = engine.pick_goal_sets(m, rng)
+        else:
+            ensure_image(chooser_id)
+            goal_A, goal_B = ai_goals(chooser_id, m, timeout)
+        if picker_id == "random":
+            picker_side = rng.choice(["first", "second"])
+        else:
+            ensure_image(picker_id)
+            # 出题时的地图（死点/流沙）尚未生成：先按空地图选边，开局后再补全
+            picker_side = ai_side(picker_id, n, m, set(), set(), goal_A, goal_B, timeout)
+    except AIError as e:
+        raise AIError(f"出题/选边失败：{e}")
+    st = engine.new_game(n=n, m=m, seed=seed, goal_A=goal_A, goal_B=goal_B)
+    # picker 选 first 即坐先手席（seat0），否则坐后手席；sides 即席位顺序
+    sides = [picker_id, chooser_id] if picker_side == "first" else [chooser_id, picker_id]
     for pl, side in enumerate(sides):
         if side != "random":
             try:
@@ -277,7 +342,8 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
         st.winner = -1  # 超出步数上限判平局
         st.win_reason = f"达到步数上限（{max_plies}），判平局"
     return {"winner": st.winner, "win_reason": st.win_reason, "plies": plies,
-            "sides": sides, "state": st.to_dict()}
+            "sides": sides, "chooser": chooser_side, "picker_side": picker_side,
+            "goal_A": goal_A, "goal_B": goal_B, "state": st.to_dict()}
 
 
 def list_ais() -> list[dict]:

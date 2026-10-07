@@ -69,6 +69,31 @@ int main() {
         return 0;
     }
 
+    // ===== 阶段零之一：出题（选 A/B 获胜列集） =====
+    // 选边在后、执子未知，故出对称题：A=B=中间 k 列，把选择留给选边阶段。
+    if (getStr(j, "phase", "") == "goals") {
+        int m = getInt(j, "m", 9);
+        int k = m / 2;
+        int start = (m - k) / 2;
+        json cols = json::array();
+        for (int c = start; c < start + k; ++c) cols.push_back(c);
+        std::cout << json({{"goal_A", cols}, {"goal_B", cols}}).dump();
+        return 0;
+    }
+
+    // ===== 阶段零之二：选边（先手+A / 后手+B） =====
+    // 按双方起点到目标的最短距离（只考虑死点）挑近的一边，打平要先手。
+    if (getStr(j, "phase", "") == "side") {
+        Board b = parseBoard(j);
+        auto d0 = bfsDist(b, 0, {});
+        auto d1 = bfsDist(b, 1, {});
+        int distFirst = d0[0][b.m / 2];
+        int distSecond = d1[b.n - 1][b.m / 2];
+        std::string side = distFirst <= distSecond ? "first" : "second";
+        std::cout << json({{"side", side}}).dump();
+        return 0;
+    }
+
     // ===== 阶段二：行动 =====
     Board b = parseBoard(j);
     bool canSkill = !b.seqSkillUsed;

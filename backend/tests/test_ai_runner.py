@@ -117,3 +117,27 @@ def test_builtin_defaults():
                                       "seed": 9, "max_plies": 200, "timeout": 10})
     assert r.status_code == 200, r.text
     assert r.json()["winner"] in (0, 1, -1)
+
+
+@needs_docker
+def test_ai_goals_and_side():
+    c = TestClient(app)
+    for aid in ("builtin-greedy", "builtin-random"):
+        r = c.post("/api/ai/goals", json={"aid": aid, "m": 9, "timeout": 10})
+        assert r.status_code == 200, r.text
+        a, b = r.json()["goal_A"], r.json()["goal_B"]
+        assert len(a) == 4 and len(b) == 4 and len(set(a)) == 4 and len(set(b)) == 4
+        assert all(0 <= x < 9 for x in a + b)
+        r = c.post("/api/ai/side", json={"aid": aid, "n": 9, "m": 9, "deads": [[4, 4]],
+                                         "sands": [], "goal_A": a, "goal_B": b, "timeout": 10})
+        assert r.status_code == 200, r.text
+        assert r.json()["side"] in ("first", "second")
+    # 非法 m 报 400
+    assert c.post("/api/ai/goals", json={"aid": "builtin-random", "m": 8}).status_code == 400
+    # 对战支持指定出题方：贪心出题、随机选边
+    r = c.post("/api/ai/match", json={"white": "builtin-greedy", "black": "random", "n": 9, "m": 9,
+                                      "seed": 3, "max_plies": 200, "timeout": 10, "chooser": "white"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["chooser"] == "white" and body["picker_side"] in ("first", "second")
+    assert body["winner"] in (0, 1, -1) and len(body["goal_A"]) == 4

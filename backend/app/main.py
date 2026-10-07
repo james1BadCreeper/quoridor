@@ -27,6 +27,8 @@ from .engine import (
 )
 from .models import (
     AIRequest,
+    AIGoalsRequest,
+    AISideRequest,
     ExternalMoveRequest,
     MatchRequest,
     NewGameRequest,
@@ -267,12 +269,34 @@ def post_external_move(gid: str, req: ExternalMoveRequest) -> dict:
 
 @app.post("/api/ai/match")
 def run_match(req: MatchRequest) -> dict:
-    """AI 对战：双方各为 "random" 或已编译 aid；犯规/超时者判负，超步数判平局。"""
+    """AI 对战：出题方（chooser）定 A/B 列集，另一方选边；犯规/超时者判负，超步数判平局。"""
     try:
         return ai_runner.play_match(req.white, req.black, req.n, req.m,
-                                    req.seed, req.max_plies, req.timeout)
+                                    req.seed, req.max_plies, req.timeout, req.chooser)
     except AIError as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/ai/goals")
+def post_ai_goals(req: AIGoalsRequest) -> dict:
+    """AI 出题：返回校验过的 A/B 获胜列集（非法出题报 400）。"""
+    try:
+        a, b = ai_runner.ai_goals(req.aid, req.m, req.timeout)
+    except AIError as e:
+        raise HTTPException(400, str(e))
+    return {"aid": req.aid, "goal_A": a, "goal_B": b}
+
+
+@app.post("/api/ai/side")
+def post_ai_side(req: AISideRequest) -> dict:
+    """AI 选边：返回 first（先手+A）或 second（后手+B），非法报 400。"""
+    try:
+        side = ai_runner.ai_side(req.aid, req.n, req.m, {tuple(x) for x in req.deads},
+                                 {tuple(x) for x in req.sands},
+                                 req.goal_A, req.goal_B, req.timeout)
+    except AIError as e:
+        raise HTTPException(400, str(e))
+    return {"aid": req.aid, "side": side}
 
 
 @app.get("/api/games/{gid}/export")

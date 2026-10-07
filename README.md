@@ -51,12 +51,17 @@ npm run dev   # 访问 http://127.0.0.1:5173（/api 已代理到 8000 端口）
 
 - AI 是一个程序：从 stdin 读入一个 json（当前局面），向 stdout 输出一行决策 json。
 - 语言不限（示例用 C++，可直接照抄）；源码打成 `.zip` 上传，后端在 docker 沙箱里编译、运行、对战。
-- 两阶段协议：赛前选技能卡（1 次）→ 每轮行动（多次）。
+- 两阶段协议：赛前选技能卡（1 次）→ 每轮行动（多次）；出题方另有出题阶段（定 A/B 列集），另一方有选边阶段（先手+A / 后手+B）。
 - 验证链路（由弱到强）：本地 `g++` 直编直跑 → `build.sh` + `run.sh` 走 docker 自测 → 上传后端与示例 AI / random 基线对战。
 
 ### 2. 输入输出协议
 
 棋谱格式与 `GET /api/games/{id}/export` 的返回一致，详见 `backend/app/ai_cpp_example/README.md`。
+
+**阶段零：出题与选边。** 出题输入 `{"phase":"goals","m":m}`，
+输出 `{"goal_A":[...],"goal_B":[...]}`（各 m//2 列）；选边输入地图与 A/B，
+输出 `{"side":"first"}` 或 `{"side":"second"}`。向导里 AI 出题/选边走
+`POST /api/ai/goals`、`POST /api/ai/side`；`POST /api/ai/match` 用 `chooser` 指定出题方。
 
 **阶段一：赛前选技能卡。** 输入 `{"phase":"select","skill_k":k,"n":..,"m":..,"deads":..,"sands":..,"goal_A":..,"goal_B":..}`，
 输出 `{"skills":[...]}`（恰好 k 张，可重复；技能 id 见 `GET /api/skills`）。
