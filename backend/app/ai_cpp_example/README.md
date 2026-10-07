@@ -33,52 +33,113 @@ Board b = parseBoard(j);   // j 为输入 json，b.turn 即本 AI 执子
 
 注意：json 取值一律用 `getInt/getStr` 或显式转换（nlohmann 的算术转换是 explicit 的）。
 
-## 阶段零：出题与选边（各 1 次）
+## 输入输出格式
 
-实现内容：出题方定 A/B 列集，另一方选边（先手+A / 后手+B）。
+### 阶段零之一：出题（`goals`，出题方 1 次）
 
-- 出题输入：`{"phase":"goals","m":m}` → 输出：`{"goal_A":[...],"goal_B":[...]}`（各 m//2 列，范围内、无重复，A/B 可相交）
-- 选边输入：`{"phase":"side","n":..,"m":..,"deads":..,"sands":..,"goal_A":..,"goal_B":..}` → 输出：`{"side":"first"}` 或 `{"side":"second"}`
+输入：
 
-非法出题/选边判负。出题时只传一方当出题人（`POST /api/ai/match` 的 `chooser`，或向导里 AI 出题席）。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `phase` | `"goals"` | 固定值 |
+| `m` | int | 列数，9~15 |
 
-## 阶段一：选技能卡（1 次）
+输出：
 
-实现内容：按 `skill_k` 和开局信息挑 k 张牌（可重复，对方不可见）。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `goal_A` | int[] | 先手获胜列，恰 m//2 个，`[0,m)` 内无重复 |
+| `goal_B` | int[] | 后手获胜列，约束同上；A、B 之间可重复 |
 
-- 输入：`{"phase":"select","skill_k":k,"n":..,"m":..,"deads":..,"sands":..,"goal_A":..,"goal_B":..}`
-- 输出：`{"skills":["phase_walk","make_sand"]}`（恰好 k 张，id 见 `GET /api/skills`）
+### 阶段零之二：选边（`side`，另一方 1 次）
 
-## 阶段二：每轮行动（多次）
+输入：
 
-实现内容：读棋谱，输出一个行动；行动前可先打一张手牌（不占轮次，整轮最多一张）。
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `phase` | `"side"` | 固定值 |
+| `n`、`m` | int | 行数、列数 |
+| `deads` | `[r,c][]` | 死点格（不可进入） |
+| `sands` | `[r,c][]` | 流沙格（踩中后对方连走两次） |
+| `goal_A`、`goal_B` | int[] | 出题方定的获胜列 |
 
-输入（`GET /api/games/{id}/export` 的返回）：
+输出：
 
-```json
-{
-  "n": 9, "m": 9,
-  "pawns": [[0, 4], [8, 4]], "turn": 0,
-  "walls": [{"wr": 2, "wc": 3, "orientation": "H"}],
-  "walls_left": [10, 10],
-  "deads": [[4, 4]], "sands": [[5, 5]],
-  "goal_A": [0, 1, 2, 3], "goal_B": [5, 6, 7, 8],
-  "hands": [{"phase_walk": 1}, {}],
-  "phase_buff": [false, false], "free_buff": [false, false],
-  "l_bonus": [0, 0], "must_move": false, "seq_skill_used": false,
-  "bonus_moves": 0
-}
-```
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `side` | `"first"`／`"second"` | `first`=执先手＋A，`second`=执后手＋B |
 
-- 先手顶行出发、目标底行列 ∈ A；后手反之。`turn` 为行动方（即你）；`must_move=true` 时只能走子。
-- 输出（**一行** json）：
-  - 走子：`{"type":"move","to":[r,c]}`
-  - 放墙：`{"type":"wall","wall":{"wr":..,"wc":..,"orientation":"H"}}`（直墙 H/V）；
-    L 墙（需改造权）：`{"type":"wall","wall":{"wr":..,"wc":..,"kind":"L","arm":"NW"}}`
-  - 打牌＋行动：`{"skill":"double_move","action":{"type":"move","to":[r,c]}}`；
-    流沙陷阱须带落点：`{"skill":"make_sand","to":[r,c],"action":{...}}`
+### 阶段一：选技能卡（`select`，每方 1 次）
 
-判负：输出非法 json、选牌/行动非法、进程崩溃、无输出、超时。
+输入：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `phase` | `"select"` | 固定值 |
+| `skill_k` | int | 须选张数（对方不可见，同机除外） |
+| `n`、`m`、`deads`、`sands`、`goal_A`、`goal_B` | 同上 | 开局信息，供挑牌参考 |
+
+输出：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `skills` | string[] | 恰 k 张，可重复；id 为 `l_remodel`（改造）／`double_move`（连续行动）／`phase_walk`（穿墙）／`make_sand`（流沙陷阱）／`free_wall`（免费墙） |
+
+### 阶段二：每轮行动（棋谱输入，输出一行）
+
+输入即 `GET /api/games/{id}/export` 的棋谱：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `n`、`m` | int | 行数、列数 |
+| `pawns` | `[[r,c],[r,c]]` | [先手棋子，后手棋子]；`turn` 指向的那个就是你 |
+| `turn` | 0／1 | 轮到行动方（即本次输入的执子） |
+| `walls` | object[] | 已有墙，字段见下表 wall 对象 |
+| `walls_left` | `[int,int]` | 双方剩余墙数 |
+| `deads` | `[r,c][]` | 死点格 |
+| `sands` | `[r,c][]` | 流沙格 |
+| `goal_A`、`goal_B` | int[] | 获胜列；先手目标底行 ∈ A，后手目标顶行 ∈ B |
+| `hands` | `[object,object]` | 双方手牌 `{技能id: 张数}`（棋谱对 AI 全量返回；前端展示时对人类隐藏 AI 手牌） |
+| `phase_buff` | `[bool,bool]` | 穿墙 buff（下次走子无视墙，仍不能进死点） |
+| `free_buff` | `[bool,bool]` | 免费墙 buff（下次放墙不耗存量） |
+| `l_bonus` | `[int,int]` | L 墙放置权（打出改造获得） |
+| `must_move` | bool | 真＝连续行动中，只能走子不能放墙 |
+| `seq_skill_used` | bool | 真＝本序列已打出过技能，不能再打 |
+| `bonus_moves` | int | ＞0＝同一人继续行动（流沙罚步或连续行动） |
+| `skill_k` | int | 本局每人选牌数（复盘用） |
+| `started` | bool | 双方选完牌后为真 |
+| `winner`／`win_reason` | int／null＋string | 行动输入中恒为 null（终局不会再调 AI） |
+| `history` | object[] | 历史记录（只读，供复盘）；条目见下表 |
+
+wall 对象：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `wr`、`wc` | int | 墙锚点：直墙 H 要求 `1<=wr<=n-1, 0<=wc<=m-2`；V 要求 `0<=wr<=n-2, 1<=wc<=m-1`；L 要求 `1<=wr<=n-1, 1<=wc<=m-1` |
+| `orientation` | `"H"`／`"V"` | 直墙方向（横阻纵向、竖阻横向）；L 墙无此字段 |
+| `kind` | `"straight"`／`"L"` | 缺省为直墙；L 需改造权 |
+| `arm` | `"NW"`／`"NE"`／`"SW"`／`"SE"` | 仅 L 墙：直角朝向 |
+
+history 条目（`type` 区分）：
+
+| `type` | 附加字段 | 说明 |
+|---|---|---|
+| `move` | `to:[r,c]` | 走子（含跳子落点） |
+| `wall` | `wall:{...}` | 放墙（同 wall 对象） |
+| `skill` | `skill:id`，流沙陷阱另带 `to:[r,c]` | 打出手牌（双方得知） |
+| `select_skills` | `skills:[...]` | 赛前选牌（注意：条目含完整牌内容，复盘可见） |
+| `quicksand` | — | 踩中流沙，对方连续行动两次 |
+
+输出（**一行** json）：
+
+| 格式 | 说明 |
+|---|---|
+| `{"type":"move","to":[r,c]}` | 走子（须在合法走子集内，含跳子） |
+| `{"type":"wall","wall":{...}}` | 放墙（直墙 H/V；L 墙需改造权，见 wall 对象） |
+| `{"skill":"<id>","action":{...}}` | 先打一张手牌再行动；`action` 为上两种之一 |
+| `{"skill":"make_sand","to":[r,c],"action":{...}}` | 流沙陷阱须带落点 `to`（禁死点/已有流沙/棋子格/获胜点） |
+
+判负：输出非法 json、选牌/出题/选边/行动非法、进程崩溃、无输出、超时。
 
 ## 编译、测试、上传
 
