@@ -212,10 +212,29 @@ def test_l_remodel_grants_l_wall():
     ok, _ = is_wall_legal(st, 0, Wall(wr=3, wc=3, kind="L", arm="NW"))
     assert not ok  # 未打出技能前无放置权
     play_skill(st, "l_remodel")
-    assert st.l_bonus[0] == 1
+    assert st.l_bonus[0] == 1 and st.l_pending[0]
     left = st.walls_left[0]
     apply_wall(st, Wall(wr=3, wc=3, kind="L", arm="NW"))
-    assert st.l_bonus[0] == 0 and st.walls_left[0] == left - 1
+    assert st.l_bonus[0] == 0 and st.walls_left[0] == left - 1 and not st.l_pending[0]
+
+
+def test_l_remodel_void_if_not_placed():
+    st = _started()
+    st.hands[0] = {"l_remodel": 1}
+    play_skill(st, "l_remodel")
+    mv = legal_pawn_moves(st, 0)[0]
+    apply_pawn_move(st, mv)  # 走子则作废
+    assert st.l_bonus[0] == 0 and not st.l_pending[0]
+    assert st.hands[0] == {}  # 卡已打出，不退还
+
+
+def test_l_remodel_void_on_straight_wall():
+    st = _started()
+    st.hands[0] = {"l_remodel": 1}
+    play_skill(st, "l_remodel")
+    left = st.walls_left[0]
+    apply_wall(st, Wall(wr=2, wc=0, orientation="H"))  # 放直墙则作废
+    assert st.l_bonus[0] == 0 and not st.l_pending[0] and st.walls_left[0] == left - 1
 
 
 def test_free_wall():
@@ -345,3 +364,15 @@ def test_to_dict_viewer_strips_opponent():
     assert got == [["double_move"] * st.skill_k, []]
     v1 = st.to_dict(viewer=1)
     assert v1["hands"] == [{}, {"phase_walk": 2}]
+
+
+def test_to_ai_dict_is_slim():
+    """AI 快照：只有当前状态，无历史与可推导字段；对方只给手牌总数。"""
+    st = new_game(n=9, m=9, seed=7)
+    select_skills(st, 0, ["double_move"] * st.skill_k)
+    select_skills(st, 1, ["phase_walk"] * st.skill_k)
+    d = st.to_ai_dict()
+    assert set(d) == {"n", "m", "pawns", "turn", "walls", "walls_left", "deads", "sands",
+                      "goal_A", "goal_B", "hand", "opp_hand_count", "must_move",
+                      "seq_skill_used", "bonus_moves"}
+    assert d["hand"] == {"double_move": 2} and d["opp_hand_count"] == 2

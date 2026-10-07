@@ -201,30 +201,10 @@ def post_external_move(gid: str, req: ExternalMoveRequest) -> dict:
     if not st.started:
         raise HTTPException(400, "双方选完技能卡后方可行动")
     try:
-        decision = ai_runner.run_ai(req.aid, st.to_dict(), req.timeout)
-        played = None
-        if not isinstance(decision, dict):
-            raise AIError(f"决策须为 json 对象：{str(decision)[:200]}")
-        if "skill" in decision:
-            try:
-                play_skill(st, decision["skill"], decision.get("to"))
-            except ValueError as e:
-                raise AIError(f"打出手牌非法（{decision.get('skill')}）：{e}")
-            played = {"skill": decision["skill"], "to": decision.get("to")}
-        action = decision.get("action", decision)
-        if not isinstance(action, dict) or action.get("type") == "skill":
-            raise AIError(f"行动非法：{str(action)[:200]}")
-        if action.get("type") == "move":
-            apply_pawn_move(st, action["to"])
-        elif action.get("type") == "wall":
-            apply_wall(st, Wall.from_dict(action["wall"]))
-        else:
-            raise AIError(f"未知行动类型：{action.get('type')}")
+        summary = ai_runner.apply_external_decision(req.aid, st, req.timeout)
     except AIError as e:
         raise HTTPException(400, str(e))
-    except (ValueError, KeyError, TypeError) as e:
-        raise HTTPException(400, f"行动非法：{e}")
-    return {"id": gid, "action": action, "skill": played, "state": st.to_dict()}
+    return {"id": gid, **summary, "state": st.to_dict()}
 
 
 @app.post("/api/ai/match")

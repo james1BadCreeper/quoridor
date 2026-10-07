@@ -27,6 +27,8 @@ Board b = parseBoard(j);   // j 为输入 json，b.turn 即本 AI 执子
 | `bfsDist(b, player, blocked)` | 到目标的最短步数表，到不了为 `INF` |
 | `checkMove(b, to)` | 走子是否合法 → `{ok, reason}` |
 | `checkWall(b, w, forbidSurround=true)` | 放墙是否合法 → `{ok, reason}`；`true` 时断路也算非法，执意围死传 `false`（引擎允许围死，被围者直接获胜） |
+| `checkDecision(b, out)` | 整轮输出是否合法 → `{ok, reason}`（含流沙作废语义；输出前必调） |
+| `moveAct(r,c)`／`wallAct(w)`／`decision(skill,to,acts)` | 组装行动与整轮输出，避免手写括号出错 |
 | `sandOk(b, c)` | 流沙陷阱落点是否合法（禁死点/已有流沙/棋子格/获胜点） |
 | `wallJson(w)` | `WallSpec` 转输出格式 |
 | `rng()` | 随机数引擎 |
@@ -57,7 +59,7 @@ std::cout << out.dump();
 
 1. **一律显式转换**——`(int)x`、`(std::string)x`、`x.is_number()` 先判后取；隐式塞进 `pair`/容器会触发整对象转换导致崩溃（真实踩坑）。
 2. **可空字段先判**——如墙的 `arm` 为 null 时必须走缺省，不能直接 `w.value("arm", "NW")`。
-3. **输出必须一行合法 json**——多余 `cout` 调试信息会导致解析失败判负；`hands` 等数组按下标取前先判长度。
+3. **输出必须一行合法 json**——多余 `cout` 调试信息会导致解析失败判负；数组按下标取前先判长度。
 
 ## 输入输出格式
 
@@ -109,11 +111,11 @@ std::cout << out.dump();
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `skills` | string[] | 恰 k 张，可重复；id 为 `l_remodel`（改造）／`double_move`（连续行动）／`phase_walk`（穿墙）／`make_sand`（流沙陷阱）／`free_wall`（免费墙） |
+| `skills` | string[] | 恰 k 张，可重复；id 为 `l_remodel`（改造现打现放：打出后本次行动必须放 L 墙，否则作废）／`double_move`（连续行动）／`phase_walk`（穿墙）／`make_sand`（流沙陷阱）／`free_wall`（免费墙） |
 
-### 阶段二：每轮行动（棋谱输入，输出一行）
+### 阶段二：每轮行动（精简快照输入，输出一行）
 
-输入即 `GET /api/games/{id}/export` 的棋谱：
+输入为当前棋盘状态（无历史操作、无可推导字段；完整棋谱格式见 `GET /api/games/{id}/export`，仅回放用）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -125,17 +127,11 @@ std::cout << out.dump();
 | `deads` | `[r,c][]` | 死点格 |
 | `sands` | `[r,c][]` | 流沙格 |
 | `goal_A`、`goal_B` | int[] | 获胜列；先手目标底行 ∈ A，后手目标顶行 ∈ B |
-| `hands` | `[object,object]` | 双方手牌 `{技能id: 张数}`（传给 AI 的是其视角：对方手牌恒为空，只能看到自己的） |
-| `phase_buff` | `[bool,bool]` | 穿墙 buff（下次走子无视墙，仍不能进死点） |
-| `free_buff` | `[bool,bool]` | 免费墙 buff（下次放墙不耗存量） |
-| `l_bonus` | `[int,int]` | L 墙放置权（打出改造获得） |
+| `hand` | object | 自家手牌 `{技能id: 张数}`（打哪张就写哪张） |
+| `opp_hand_count` | int | 对方剩余手牌总数（只给张数，不给明细） |
 | `must_move` | bool | 真＝连续行动中，只能走子不能放墙 |
 | `seq_skill_used` | bool | 真＝本序列已打出过技能，不能再打 |
 | `bonus_moves` | int | ＞0＝同一人继续行动（流沙罚步或连续行动） |
-| `skill_k` | int | 本局每人选牌数（复盘用） |
-| `started` | bool | 双方选完牌后为真 |
-| `winner`／`win_reason` | int／null＋string | 行动输入中恒为 null（终局不会再调 AI） |
-| `history` | object[] | 历史记录（只读，供复盘）；条目见下表 |
 
 wall 对象：
 
@@ -143,27 +139,23 @@ wall 对象：
 |---|---|---|
 | `wr`、`wc` | int | 墙锚点：直墙 H 要求 `1<=wr<=n-1, 0<=wc<=m-2`；V 要求 `0<=wr<=n-2, 1<=wc<=m-1`；L 要求 `1<=wr<=n-1, 1<=wc<=m-1` |
 | `orientation` | `"H"`／`"V"` | 直墙方向（横阻纵向、竖阻横向）；L 墙无此字段 |
-| `kind` | `"straight"`／`"L"` | 缺省为直墙；L 需改造权 |
+| `kind` | `"straight"`／`"L"` | 缺省为直墙；L 墙只能配改造技能同一次打出（裸 L 非法） |
 | `arm` | `"NW"`／`"NE"`／`"SW"`／`"SE"` | 仅 L 墙：直角朝向 |
 
-history 条目（`type` 区分）：
+输出（**一行** json，一次覆盖整轮）：
 
-| `type` | 附加字段 | 说明 |
+```json
+{"skill": "double_move", "actions": [{"type": "move", "to": [1, 4]}, {"type": "move", "to": [2, 4]}]}
+```
+
+| 部分 | 格式 | 说明 |
 |---|---|---|
-| `move` | `to:[r,c]` | 走子（含跳子落点） |
-| `wall` | `wall:{...}` | 放墙（同 wall 对象） |
-| `skill` | `skill:id`，流沙陷阱另带 `to:[r,c]` | 打出手牌（双方得知） |
-| `select_skills` | `skills:[...]` | 赛前选牌（传给 AI 的视角中对方内容为空；全量导出/回放可见） |
-| `quicksand` | — | 踩中流沙，对方连续行动两次 |
+| `skill` | 可缺省 | 技能 id（本序列未用过、手牌须有；`make_sand` 须带落点 `"to":[r,c]`） |
+| `actions` | 1~2 个对象 | `{"type":"move","to":[r,c]}` 走子；`{"type":"wall","wall":{...}}` 放墙（直墙 H/V；L 墙须配改造同打） |
 
-输出（**一行** json）：
-
-| 格式 | 说明 |
-|---|---|
-| `{"type":"move","to":[r,c]}` | 走子（须在合法走子集内，含跳子） |
-| `{"type":"wall","wall":{...}}` | 放墙（直墙 H/V；L 墙需改造权，见 wall 对象） |
-| `{"skill":"<id>","action":{...}}` | 先打一张手牌再行动；`action` 为上两种之一 |
-| `{"skill":"make_sand","to":[r,c],"action":{...}}` | 流沙陷阱须带落点 `to`（禁死点/已有流沙/棋子格/获胜点） |
+执行与判负（后端逐条落子）：按顺序执行，轮到对方或终局后剩余作废——首步踩流沙则第二步无论是什么都作废，普通轮次多给的一步也作废；
+形状错误（非对象、`actions` 不是 1~2 个）直接判负；技能非法、首步非法、该走时第二步非法直接判负。
+连续行动的两步都必须是走子。输出前务必调 `checkDecision(b, out)` 自检（语义与后端一致；`checked` 会在不过时退化保底）。
 
 判负：输出非法 json、选牌/出题/选边/行动非法、进程崩溃、无输出、超时。
 
@@ -184,6 +176,6 @@ curl -X POST http://127.0.0.1:8000/api/ai/match \
 ## 规则要点
 
 1. 死点不可进；踩流沙则**对方连走两次**，赶路应避开（首末行无死点/流沙）。
-2. 墙长 2（横/竖），改造后可放 1+1 的 L 墙；放墙不重边；允许堵死，但被围者**直接获胜**。
+2. 墙长 2（横/竖），改造现打现放 1+1 的 L 墙（不放即作废）；放墙不重边；允许堵死，但被围者**直接获胜**。
 3. 跳子：邻对方棋子时直线跳过，被挡则走其两侧斜格，对方格不可停。
 4. 到达己方获胜点即胜；连续行动两步须走子；流沙陷阱禁死点/已有流沙/棋子格/获胜点；打牌双方得知。

@@ -85,6 +85,62 @@ export function wallLocalLegal(st, player, w) {
   return { ok: true, reason: '' };
 }
 
+// —— 回放文件格式 quoridor-replay/1：头部静态信息 + 每步动态 + 事件增量 ——
+// 旧全快照格式每个 snap 重复尺寸/死点/目标列，且 history 跨 snap 平方级重复；
+// 新格式只记一次静态，墙/流沙/历史由事件累积重建，体积小一个量级。
+export const REPLAY_FORMAT = 'quoridor-replay/1';
+
+const DYNAMIC_KEYS = ['turn', 'pawns', 'walls_left', 'hands', 'l_bonus', 'phase_buff',
+  'free_buff', 'must_move', 'seq_skill_used', 'bonus_moves', 'winner', 'win_reason'];
+// 首步存全量（含 walls/sands），后续只存增量（墙/流沙由事件累积重建）
+const FULL_KEYS = [...DYNAMIC_KEYS, 'walls', 'sands'];
+
+export function buildReplay(snaps, meta) {
+  if (!snaps.length) return null;
+  const first = snaps[0];
+  const header = {
+    n: first.n, m: first.m, walls_total: first.walls_total,
+    deads: first.deads, goal_A: first.goal_A, goal_B: first.goal_B, skill_k: first.skill_k,
+    pawns0: first.pawns, walls_left0: first.walls_left,
+    hands0: first.hands, l_bonus0: first.l_bonus, meta,
+  };
+  const plies = snaps.map((s, i) => {
+    const prevLen = i === 0 ? 0 : snaps[i - 1].history.length;
+    const dyn = { events: (s.history || []).slice(prevLen) };
+    for (const k of (i === 0 ? FULL_KEYS : DYNAMIC_KEYS)) dyn[k] = s[k];
+    return dyn;
+  });
+  return { format: REPLAY_FORMAT, header, plies };
+}
+
+export function parseReplay(j) {
+  if (!j || j.format !== REPLAY_FORMAT) return null;
+  const H = j.header;
+  // 兼容首步全量缺 walls/sands 的旧增量文件（回退为空开局累积）
+  let walls = [...(j.plies[0]?.walls ?? [])], sands = [...(j.plies[0]?.sands ?? [])];
+  let history = [];
+  const snaps = j.plies.map((p, i) => {
+    if (i > 0) {
+      for (const e of p.events || []) {
+        if (e.type === 'wall') walls.push(e.wall);
+        if (e.type === 'skill' && e.skill === 'make_sand' && e.to) sands.push(e.to);
+      }
+    }
+    for (const e of p.events || []) history.push(e);
+    return {
+      n: H.n, m: H.m, walls_total: H.walls_total, deads: H.deads,
+      goal_A: H.goal_A, goal_B: H.goal_B, skill_k: H.skill_k,
+      pawns: p.pawns ?? H.pawns0, turn: p.turn, walls: [...walls], walls_left: p.walls_left ?? H.walls_left0,
+      sands: [...sands], hands: p.hands ?? H.hands0, l_bonus: p.l_bonus ?? H.l_bonus0,
+      phase_buff: p.phase_buff, free_buff: p.free_buff,
+      must_move: p.must_move, seq_skill_used: p.seq_skill_used,
+      bonus_moves: p.bonus_moves, winner: p.winner, win_reason: p.win_reason,
+      history: [...history], started: true, skills_picked: [true, true],
+    };
+  });
+  return { snaps, meta: H.meta };
+}
+
 // 技能卡数 F(n,m)（镜像 engine.skill_count）：最小地图取 2，随墙数增长
 export const skillK = (n, m) => Math.max(2, Math.floor(Math.floor(((n + 1) * (m + 1)) / 10) / 5));
 

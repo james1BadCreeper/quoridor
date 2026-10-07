@@ -4,6 +4,7 @@ import SetupWizard from './components/SetupWizard.jsx';
 import {
   apiExternalMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall,
   apiSkillAiSelect, apiSkillPlay, apiSkillSelect, apiSkills,
+  buildReplay, parseReplay,
   sandLocalLegal, wallLocalLegal,
 } from './api.js';
 
@@ -190,8 +191,10 @@ export default function App() {
   }, [autoAI, live, turnIsAI, step]);
 
   function exportKifu() {
-    if (!state) return;
-    const blob = new Blob([JSON.stringify({ state, snaps, meta: { seatNames, seatTypes, seatAIs, redSeat } }, null, 2)], { type: 'application/json' });
+    if (!snaps.length) return;
+    const doc = buildReplay(snaps, { seatNames, seatTypes, seatAIs, redSeat });
+    if (!doc) return;
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `kifu_${gid ?? 'local'}.json`;
@@ -203,7 +206,19 @@ export default function App() {
     if (!f) return;
     try {
       const j = JSON.parse(await f.text());
-      if (j.snaps) {
+      const replay = parseReplay(j);
+      if (replay) {
+        setSnaps(replay.snaps);
+        setStep(0);
+        setState(replay.snaps[replay.snaps.length - 1]);
+        if (replay.meta) {
+          setSeatNames(replay.meta.seatNames); setSeatTypes(replay.meta.seatTypes);
+          setSeatAIs(replay.meta.seatAIs ?? ['builtin-random', 'builtin-random']);
+          if (replay.meta.redSeat === 0 || replay.meta.redSeat === 1) setRedSeat(replay.meta.redSeat);
+        }
+        setGid(null);
+        setWizardOpen(false);
+      } else if (j.snaps) {
         setSnaps(j.snaps);
         setStep(0);
         setState(j.snaps[j.snaps.length - 1]);
@@ -259,6 +274,11 @@ export default function App() {
               <span className={`wcount p${idc(0)}`}>先手·{seatNames[0]} 墙 {shown.walls_left[0]}（L券 {shown.l_bonus?.[0] ?? 0}）</span>
               <span className={`wcount p${idc(1)}`}>后手·{seatNames[1]} 墙 {shown.walls_left[1]}（L券 {shown.l_bonus?.[1] ?? 0}）</span>
               {shown.must_move && <span className="pill warn">连续行动：只能走子</span>}
+              {(shown.l_bonus?.[shown.turn] ?? 0) > 0 && (
+                <span className="pill warn" title="改造现打现放：本次行动必须放置 L 墙，否则作废">
+                  改造待放置：须放 L 墙，否则作废
+                </span>
+              )}
               {shown.phase_buff?.[shown.turn] && <span className="pill">穿墙就绪</span>}
               {shown.free_buff?.[shown.turn] && <span className="pill">免费墙就绪</span>}
               <span className="muted small">A=[{shown.goal_A.join(',')}] 先手底线　B=[{shown.goal_B.join(',')}] 后手顶线</span>

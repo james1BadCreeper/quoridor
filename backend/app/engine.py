@@ -6,7 +6,7 @@
 - 先手目标：底行 (n-1, c)，c∈A；后手目标：顶行 (0, c)，c∈B。
   A、B 为列集合，各自大小均为 floor(m/2)，相互独立（可相交、可留空列）。
 - 墙为直墙（长 2）：横墙阻断纵向移动，竖墙阻断横向移动。
-  打出技能“改造”后可放置 L 形墙（1+1 直角，总长 2）。
+  打出技能“改造”后本次行动必须放置 L 形墙（1+1 直角，总长 2），否则作废。
 - 技能卡：开局选定目标点、知晓地图后，双方各选 k 张（可重复，对方不可见，
   同机对战除外）。行动前可打出一张，不占轮次；连续行动序列中最多打出一张。
 """
@@ -24,7 +24,7 @@ SkillId = Literal["l_remodel", "double_move", "phase_walk", "make_sand", "free_w
 
 # 技能定义：id → 中文名与描述
 SKILLS: dict[str, dict[str, str]] = {
-    "l_remodel": {"name": "改造", "desc": "获得 1 次 L 形墙放置权（放置时消耗 1 面墙存量）"},
+    "l_remodel": {"name": "改造", "desc": "打出后本次行动必须放置 L 墙，否则作废（放置时消耗 1 面墙存量）"},
     "double_move": {"name": "连续行动", "desc": "本回合连续移动两次（两次都必须是走子）"},
     "phase_walk": {"name": "穿墙", "desc": "下一次走子无视墙（仍不能进入死点）"},
     "make_sand": {"name": "流沙陷阱", "desc": "将一个格变为流沙（不能选死点/已有流沙/棋子格/获胜点）"},
@@ -90,7 +90,8 @@ class GameState:
     hands: list[dict] = field(default_factory=lambda: [{}, {}])  # 每人手牌 {技能id: 张数}
     skills_picked: list[bool] = field(default_factory=lambda: [False, False])
     started: bool = True  # 双方选完技能后方可行动（直接构造的状态默认为已开始）
-    l_bonus: list[int] = field(default_factory=lambda: [0, 0])  # L 墙放置权（改造技能）
+    l_bonus: list[int] = field(default_factory=lambda: [0, 0])  # L 墙放置权（改造技能，现打现放）
+    l_pending: list[bool] = field(default_factory=lambda: [False, False])  # 改造待放置：下次行动须放 L 墙否则作废
     phase_buff: list[bool] = field(default_factory=lambda: [False, False])  # 穿墙 buff（下次走子生效）
     free_buff: list[bool] = field(default_factory=lambda: [False, False])  # 免费墙 buff（下次放墙生效）
     must_move: bool = False  # 连续行动中：只能走子不能放墙
@@ -129,10 +130,41 @@ class GameState:
             "skills_picked": self.skills_picked,
             "started": self.started,
             "l_bonus": self.l_bonus,
+            "l_pending": self.l_pending,
             "phase_buff": self.phase_buff,
             "free_buff": self.free_buff,
             "must_move": self.must_move,
             "seq_skill_used": self.seq_skill_used,
+        }
+
+    def to_ai_dict(self) -> dict:
+        """传给 AI 的精简快照：只有当前棋盘状态，无历史操作。
+
+        与导出棋谱格式不通用：此处只给决策必需项。
+        含：尺寸、双方棋子、轮次、墙（位置/余量）、死点/流沙、获胜列、
+        自家手牌明细、对方手牌总数、连续行动/序列锁/奖励步。
+        不含：history（技能打出无后效，复盘才用）、胜负/开局标记（调用时恒定）、
+        skill_k/walls_total（由 n、m 推导）、穿墙/免费墙 buff
+        （技能与行动原子打出，不会残留到下次决策）、L 券
+        （改造现打现放：打出后本次行动必须放 L 墙，否则作废，无需传入）。
+        """
+        me, opp = self.turn, 1 - self.turn
+        return {
+            "n": self.n,
+            "m": self.m,
+            "pawns": self.pawns,
+            "turn": self.turn,
+            "walls": [w.to_dict() for w in self.walls],
+            "walls_left": self.walls_left,
+            "deads": sorted(self.deads),
+            "sands": sorted(self.sands),
+            "goal_A": self.goal_A,
+            "goal_B": self.goal_B,
+            "hand": dict(self.hands[me]),
+            "opp_hand_count": sum(self.hands[opp].values()),
+            "must_move": self.must_move,
+            "seq_skill_used": self.seq_skill_used,
+            "bonus_moves": self.bonus_moves,
         }
 
     @staticmethod
@@ -158,6 +190,7 @@ class GameState:
             skills_picked=list(d.get("skills_picked", [True, True])),
             started=d.get("started", True),
             l_bonus=list(d.get("l_bonus", [0, 0])),
+            l_pending=list(d.get("l_pending", [False, False])),
             phase_buff=list(d.get("phase_buff", [False, False])),
             free_buff=list(d.get("free_buff", [False, False])),
             must_move=d.get("must_move", False),
@@ -451,6 +484,15 @@ def _advance_turn(state: GameState) -> None:
     state.must_move = False
 
 
+def _settle_l_pending(state: GameState, player: int, placed_l: bool) -> None:
+    """结算改造待放置：放了 L 墙则消耗放置权，否则本次作废。"""
+    if not state.l_pending[player]:
+        return
+    state.l_pending[player] = False
+    if not placed_l:
+        state.l_bonus[player] = max(0, state.l_bonus[player] - 1)
+
+
 def apply_pawn_move(state: GameState, to: list[int] | tuple[int, int]) -> GameState:
     """走子：合法则移动，踩流沙对方连走两次；到达目标则获胜；否则判围死。"""
     if state.winner is not None:
@@ -464,6 +506,7 @@ def apply_pawn_move(state: GameState, to: list[int] | tuple[int, int]) -> GameSt
         raise ValueError(f"非法走子 {(tr, tc)}")
     state.pawns[player] = [tr, tc]
     state.phase_buff[player] = False  # 穿墙 buff 在走子后消耗
+    _settle_l_pending(state, player, placed_l=False)  # 走子则改造待放置作废
     state.history.append({"player": player, "type": "move", "to": [tr, tc]})
 
     # 到达目标直接获胜（先于围死判定）
@@ -507,6 +550,7 @@ def apply_wall(state: GameState, w: Wall) -> GameState:
     state.walls.append(w)
     if w.kind == "L":
         state.l_bonus[player] -= 1
+    _settle_l_pending(state, player, placed_l=(w.kind == "L"))
     if free:
         state.free_buff[player] = False
     else:
@@ -588,7 +632,9 @@ def play_skill(
     entry: dict = {"player": player, "type": "skill", "skill": skill}
 
     if skill == "l_remodel":
+        # 现打现放：本次行动必须放置 L 墙，否则下次行动时作废
         state.l_bonus[player] += 1
+        state.l_pending[player] = True
     elif skill == "double_move":
         state.bonus_moves += 1  # 本回合再行动一次
         state.must_move = True  # 两次都必须是移动

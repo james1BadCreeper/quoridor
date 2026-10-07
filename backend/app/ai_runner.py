@@ -241,32 +241,51 @@ def select_for(side: str, st: engine.GameState, timeout: float) -> list[str]:
 
 
 def _step_side(side: str, st: engine.GameState, timeout: float) -> dict:
-    """某席位行动一步并落到引擎；返回 {"skill":..,"action":..} 摘要。"""
+    """某席位行动一轮并落到引擎；返回 {"skill":..,"actions":[已执行..],"applied":n}。
+
+    新协议一次输出覆盖整轮：{"skill":..,"to":..,"actions":[{..},...]}。
+    形状错误（非对象、actions 缺失/不是 1~2 个对象）直接判负；
+    技能与首个行动非法直接判负；执行中轮到对方或终局后，
+    剩余 actions 作废（不再校验，比如首步踩流沙后第二步无论是什么都作废）。
+    """
     if side == "random":
         side = RANDOM_SIDE
-    played = None
-    d = run_ai(side, st.to_dict(viewer=st.turn), timeout)
+    me = st.turn
+    d = run_ai(side, st.to_ai_dict(), timeout)
     if not isinstance(d, dict):
         raise AIError(f"决策须为 json 对象：{str(d)[:200]}")
+    actions = d.get("actions")
+    if (not isinstance(actions, list) or not 1 <= len(actions) <= 2
+            or not all(isinstance(a, dict) for a in actions)):
+        raise AIError(f"actions 须为 1~2 个行动对象：{str(d)[:200]}")
+    played = None
     if "skill" in d:
         try:
             engine.play_skill(st, d["skill"], d.get("to"))
-        except ValueError as e:
+        except (ValueError, KeyError, TypeError) as e:
             raise AIError(f"打出手牌非法（{d.get('skill')}）：{e}")
         played = {"skill": d["skill"], "to": d.get("to")}
-    action = d.get("action", d)
-    if not isinstance(action, dict) or action.get("type") == "skill":
-        raise AIError(f"行动非法：{str(action)[:200]}")
-    try:
-        if action.get("type") == "move":
-            engine.apply_pawn_move(st, action["to"])
-        elif action.get("type") == "wall":
-            engine.apply_wall(st, Wall.from_dict(action["wall"]))
-        else:
-            raise AIError(f"未知行动类型：{action.get('type')}")
-    except (ValueError, KeyError, TypeError) as e:
-        raise AIError(f"行动非法：{e}")
-    return {"player": st.turn, "type": action.get("type"), "skill": played}
+    done = []
+    for a in actions:
+        if st.winner is not None or st.turn != me:
+            break  # 轮次已结束（走子获胜/踩流沙/换人），剩余作废
+        t = a.get("type")
+        try:
+            if t == "move":
+                engine.apply_pawn_move(st, a["to"])
+            elif t == "wall":
+                engine.apply_wall(st, Wall.from_dict(a["wall"]))
+            else:
+                raise AIError(f"未知行动类型：{t}")
+        except (ValueError, KeyError, TypeError) as e:
+            raise AIError(f"行动非法：{e}")
+        done.append({"type": t})
+    return {"player": me, "skill": played, "actions": done, "applied": len(done)}
+
+
+def apply_external_decision(aid: str, st: engine.GameState, timeout: float) -> dict:
+    """单步接口用：aid 跑整轮决策并落到引擎（random 即容器随机）。"""
+    return _step_side(aid, st, timeout)
 
 
 def play_match(white: str, black: str, n: int | None = None, m: int | None = None,
@@ -329,7 +348,7 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
     while st.winner is None and plies < max_plies:
         side = sides[st.turn]
         try:
-            _step_side(side, st, timeout)
+            plies += _step_side(side, st, timeout)["applied"]
         except AIError as e:
             st.winner = 1 - st.turn
             st.win_reason = f"{'先手' if st.turn == 0 else '后手'}AI 犯规：{e}"

@@ -114,7 +114,8 @@ int main() {
     // 连续行动序列中只能走子
     if (b.mustMove) {
         Cell s = bestStep(b, distMe, legal);
-        std::cout << json({{"type", "move"}, {"to", {s.first, s.second}}}).dump();
+        json out = decision("", json(nullptr), {moveAct(s.first, s.second)});
+        std::cout << checked(b, out, legal).dump();
         return 0;
     }
 
@@ -130,15 +131,14 @@ int main() {
         }
         if (target.first >= 0) {
             Cell s = bestStep(b, distMe, legal);
-            json out = {{"skill", "make_sand"},
-                        {"to", {target.first, target.second}},
-                        {"action", {{"type", "move"}, {"to", {s.first, s.second}}}}};
-            std::cout << out.dump();
+            json to = json::array({target.first, target.second});
+            json out = decision("make_sand", to, {moveAct(s.first, s.second)});
+            std::cout << checked(b, out, legal).dump();
             return 0;
         }
     }
 
-    // --- 放墙评估：找对方增量最大、己方仍有路的墙 ---
+    // --- 放墙评估：找对方增量最大、己方仍有路的直墙（L 墙只能配改造技能现打现放，见下） ---
     WallSpec bestWall;
     bool hasWall = false;
     int bestGain = 0;
@@ -150,17 +150,10 @@ int main() {
             for (int wc = 0; wc <= b.m - 2; ++wc) cands.push_back({wr, wc, "straight", "H", "NW"});
         for (int wr = 0; wr <= b.n - 2; ++wr)
             for (int wc = 1; wc <= b.m - 1; ++wc) cands.push_back({wr, wc, "straight", "V", "NW"});
-        if (b.lBonus > 0 || (canSkill && b.hand.count("l_remodel") && b.hand["l_remodel"] > 0)) {
-            const std::string arms[4] = {"NW", "NE", "SW", "SE"};
-            for (int wr = 1; wr <= b.n - 1; ++wr)
-                for (int wc = 1; wc <= b.m - 1; ++wc)
-                    for (auto &a : arms) cands.push_back({wr, wc, "L", "", a});
-        }
         std::shuffle(cands.begin(), cands.end(), rng());  // 同分随机，打破固定偏移
         int checked = 0;
         for (auto &w : cands) {
             if (++checked > 600) break;  // 限时：大棋盘只抽查前 600 候选
-            if (w.kind == "L" && b.lBonus <= 0) continue;  // L 需改造权（下面单独处理）
             if (!wallInBounds(b, w)) continue;
             std::set<std::pair<Cell, Cell>> e;
             wallEdges(e, w.wr, w.wc, w.kind, w.ori, w.arm);
@@ -184,11 +177,16 @@ int main() {
         }
     }
 
-    // --- 技能 2：连续行动（距目标远时） ---
+    // --- 技能 2：连续行动（距目标远时，一次输出两步） ---
     if (useSkill("double_move") && myD > 3 && myD < INF) {
-        Cell s = bestStep(b, distMe, legal);
-        json out = {{"skill", "double_move"}, {"action", {{"type", "move"}, {"to", {s.first, s.second}}}}};
-        std::cout << out.dump();
+        Cell s1 = bestStep(b, distMe, legal);
+        Board b2 = b;
+        b2.me = s1;
+        auto legal2 = stepNeighbors(b2, b2.me, b2.me, b2.opp, buildBlocked(b2, {}, b2.phased));
+        Cell s2 = legal2.empty() ? s1 : bestStep(b2, distMe, legal2);
+        json out = decision("double_move", json(nullptr),
+                            {moveAct(s1.first, s1.second), moveAct(s2.first, s2.second)});
+        std::cout << checked(b, out, legal).dump();
         return 0;
     }
     // --- 技能 3：穿墙（被墙严重绕路时，用无视墙视角走一步） ---
@@ -197,21 +195,22 @@ int main() {
         auto legalPhase = stepNeighbors(b, b.me, b.me, b.opp, {});
         if (!legalPhase.empty()) {
             Cell s = bestStep(b, distPhase, legalPhase);
-            json out = {{"skill", "phase_walk"}, {"action", {{"type", "move"}, {"to", {s.first, s.second}}}}};
-            std::cout << out.dump();
+            json out = decision("phase_walk", json(nullptr), {moveAct(s.first, s.second)});
+            std::cout << checked(b, out, legalPhase).dump();
             return 0;
         }
     }
-    // --- 放墙（含免费墙 / L 墙） ---
+    // --- 放墙（含免费墙） ---
     if (hasWall && bestGain >= 2 && (b.freeWall || (rng()() % 100 < 30))) {
         json wj = wallJson(bestWall);
         if (b.freeWall && useSkill("free_wall")) {
-            json out = {{"skill", "free_wall"}, {"action", {{"type", "wall"}, {"wall", wj}}}};
-            std::cout << out.dump();
+            json out = decision("free_wall", json(nullptr), {wallAct(wj)});
+            std::cout << checked(b, out, legal).dump();
             return 0;
         }
         if (!b.freeWall) {
-            std::cout << json({{"type", "wall"}, {"wall", wj}}).dump();
+            json out = decision("", json(nullptr), {wallAct(wj)});
+            std::cout << checked(b, out, legal).dump();
             return 0;
         }
     }
@@ -233,14 +232,15 @@ int main() {
             if (overlap) continue;
             auto nb = buildBlocked(b, {w}, false);
             if (bfsDist(b, b.turn, nb)[b.me.first][b.me.second] >= INF) continue;
-            json out = {{"skill", "l_remodel"}, {"action", {{"type", "wall"}, {"wall", wallJson(w)}}}};
-            std::cout << out.dump();
+            json out = decision("l_remodel", json(nullptr), {wallAct(wallJson(w))});
+            std::cout << checked(b, out, legal).dump();
             return 0;
         }
     }
 
     // --- 默认：沿最短路走一步 ---
     Cell s = bestStep(b, distMe, legal);
-    std::cout << json({{"type", "move"}, {"to", {s.first, s.second}}}).dump();
+    json out = decision("", json(nullptr), {moveAct(s.first, s.second)});
+    std::cout << checked(b, out, legal).dump();
     return 0;
 }

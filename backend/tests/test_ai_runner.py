@@ -78,10 +78,11 @@ def test_upload_build_move_and_match(tmp_path, monkeypatch):
     c.post(f"/api/games/{gid}/skills/select", json={"player": 0, "skills": ["double_move"] * k})
     c.post(f"/api/games/{gid}/skills/select", json={"player": 1, "skills": ["phase_walk"] * k})
 
-    # 已上传 AI 走一步
+    # 已上传 AI 走一轮
     r = c.post(f"/api/games/{gid}/ai-external-move", json={"aid": aid, "timeout": 10})
     assert r.status_code == 200, r.text
-    assert r.json()["action"]["type"] in ("move", "wall")
+    body = r.json()
+    assert body["applied"] >= 1 and all(a["type"] in ("move", "wall") for a in body["actions"])
 
     # 非法 aid 报 400
     r = c.post(f"/api/games/{gid}/ai-external-move", json={"aid": "nope"})

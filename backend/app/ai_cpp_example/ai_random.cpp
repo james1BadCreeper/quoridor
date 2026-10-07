@@ -81,19 +81,22 @@ int main() {
         return 0;
     }
 
-    // ===== 阶段二：行动 =====
+    // ===== 阶段二：行动（一次输出覆盖整轮） =====
     Board b = parseBoard(j);
-    auto pickMove = [&](bool phased) {
-        auto legal = stepNeighbors(b, b.me, b.me, b.opp, buildBlocked(b, {}, phased));
+    auto legal0 = stepNeighbors(b, b.me, b.me, b.opp, buildBlocked(b, {}, b.phased));
+    auto pickFrom = [&](const Board &bb, bool phased) {
+        auto legal = stepNeighbors(bb, bb.me, bb.me, bb.opp, buildBlocked(bb, {}, phased));
         if (legal.empty()) return Cell{-1, -1};
         return legal[rng()() % legal.size()];
     };
+    auto pickMove = [&](bool phased) { return pickFrom(b, phased); };
 
     // 连续行动序列中只能走子
     if (b.mustMove) {
         Cell s = pickMove(b.phased);
         if (s.first < 0) s = b.me;
-        std::cout << json({{"type", "move"}, {"to", {s.first, s.second}}}).dump();
+        json out = decision("", json(nullptr), {moveAct(s.first, s.second)});
+        std::cout << checked(b, out, legal0).dump();
         return 0;
     }
 
@@ -106,10 +109,17 @@ int main() {
             std::string sk = owned[rng()() % owned.size()];
             if (sk == "double_move" || sk == "phase_walk") {
                 bool ph = (sk == "phase_walk") || b.phased;
-                Cell s = pickMove(ph);
-                if (s.first >= 0) {
-                    json out = {{"skill", sk}, {"action", {{"type", "move"}, {"to", {s.first, s.second}}}}};
-                    std::cout << out.dump();
+                Cell s1 = pickMove(ph);
+                if (s1.first >= 0) {
+                    // 连续行动一次走两步（第二步落流沙则后端自动作废，无需担心）
+                    Board b2 = b;
+                    b2.me = s1;
+                    b2.phased = ph;
+                    Cell s2 = pickFrom(b2, ph);
+                    if (s2.first < 0) s2 = s1;
+                    json out = decision(sk, json(nullptr),
+                                        {moveAct(s1.first, s1.second), moveAct(s2.first, s2.second)});
+                    std::cout << checked(b, out, legal0).dump();
                     return 0;
                 }
             } else if (sk == "make_sand") {
@@ -118,10 +128,9 @@ int main() {
                     if (!sandOk(b, c)) continue;
                     Cell s = pickMove(b.phased);
                     if (s.first < 0) break;
-                    json out = {{"skill", "make_sand"},
-                                {"to", {c.first, c.second}},
-                                {"action", {{"type", "move"}, {"to", {s.first, s.second}}}}};
-                    std::cout << out.dump();
+                    json to = json::array({c.first, c.second});
+                    json out = decision(sk, to, {moveAct(s.first, s.second)});
+                    std::cout << checked(b, out, legal0).dump();
                     return 0;
                 }
             } else if ((sk == "free_wall" || sk == "l_remodel") &&
@@ -133,10 +142,9 @@ int main() {
                 for (auto &w : cands)
                     if ((sk == "l_remodel") == (w.kind == std::string("L"))) fit.push_back(w);
                 if (!fit.empty()) {
-                    json out = {{"skill", sk},
-                                {"action",
-                                 {{"type", "wall"}, {"wall", wallJson(fit[rng()() % fit.size()])}}}};
-                    std::cout << out.dump();
+                    json out = decision(sk, json(nullptr),
+                                        {wallAct(wallJson(fit[rng()() % fit.size()]))});
+                    std::cout << checked(b, out, legal0).dump();
                     return 0;
                 }
             }
@@ -154,17 +162,18 @@ int main() {
             const WallSpec &w = straights[rng()() % straights.size()];
             if (b.freeWall && b.hand.count("free_wall") && b.hand["free_wall"] > 0 &&
                 !b.seqSkillUsed) {
-                json out = {{"skill", "free_wall"},
-                            {"action", {{"type", "wall"}, {"wall", wallJson(w)}}}};
-                std::cout << out.dump();
+                json out = decision("free_wall", json(nullptr), {wallAct(wallJson(w))});
+                std::cout << checked(b, out, legal0).dump();
                 return 0;
             }
-            std::cout << json({{"type", "wall"}, {"wall", wallJson(w)}}).dump();
+            json out = decision("", json(nullptr), {wallAct(wallJson(w))});
+            std::cout << checked(b, out, legal0).dump();
             return 0;
         }
     }
     Cell s = pickMove(b.phased);
     if (s.first < 0) s = b.me;
-    std::cout << json({{"type", "move"}, {"to", {s.first, s.second}}}).dump();
+    json out = decision("", json(nullptr), {moveAct(s.first, s.second)});
+    std::cout << checked(b, out, legal0).dump();
     return 0;
 }
