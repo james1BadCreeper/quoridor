@@ -7,6 +7,9 @@
 - `ai_example.cpp`：贪心示例 AI（BFS 最短路推进、挡路墙、四技能启发式），可直接照抄结构。
 - `ai_random.cpp`：随机示例 AI（同样走正规协议+本地合法性复算），演示“弱策略也必须保证输出合法”。
 - `ai_common.hpp`：公共库（棋盘解析、阻挡边、走子含跳子、BFS、放墙/流沙合法性复算），两个示例共用。
+  其中 `checkMove(b, to)` / `checkWall(b, w, forbidSurround=true)` 为动作合法性总检（复刻引擎
+  `apply_*` 校验，失败时返回中文原因）；`forbidSurround=true` 时放墙后双方断路也算非法——
+  但引擎本身允许围死（被围者直接获胜），若执意围死传 `false` 跳过此项即可。
 - `json.hpp`：捆绑的 nlohmann/json 单头文件（v3.11.3），打包时**须一起打进 zip**（或换你自己的解析方式）。
 - `Dockerfile` / `Dockerfile.random`：容器内编译模板（COPY 源码 → g++ 编译 → ENTRYPOINT 为二进制）。
 - `build.sh`：一次构建两个示例镜像（`quoridor-ai-example` / `quoridor-ai-random`）+ 选牌自检。

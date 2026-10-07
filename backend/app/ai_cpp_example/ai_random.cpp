@@ -8,10 +8,12 @@
 
 #include "ai_common.hpp"
 
-// 枚举全部“不重边、双方不断路”的直墙/ L 墙候选（L 需 lBonus>0）
-static std::vector<WallSpec> legalWallCands(const Board &b, bool allowL) {
+// 枚举全部合法墙候选（走 checkWall：余墙/L 券/范围/重边/双方不断路）。
+// lBonusOverride>=0 时按覆盖后的 L 券数校验（用于“改造现打现放”：打出后才有放置权）。
+static std::vector<WallSpec> legalWallCands(const Board &b, bool allowL, int lBonusOverride = -1) {
+    Board bb = b;
+    if (lBonusOverride >= 0) bb.lBonus = lBonusOverride;
     std::vector<WallSpec> out;
-    std::set<std::pair<Cell, Cell>> existing = buildBlocked(b, {}, false);
     std::vector<WallSpec> cands;
     for (int wr = 1; wr <= b.n - 1; ++wr)
         for (int wc = 0; wc <= b.m - 2; ++wc) cands.push_back({wr, wc, "straight", "H", "NW"});
@@ -25,19 +27,7 @@ static std::vector<WallSpec> legalWallCands(const Board &b, bool allowL) {
     }
     for (auto &w : cands) {
         if (w.kind == "L" && !allowL) continue;
-        if (!wallInBounds(b, w)) continue;
-        std::set<std::pair<Cell, Cell>> e;
-        wallEdges(e, w.wr, w.wc, w.kind, w.ori, w.arm);
-        bool overlap = false;
-        for (auto &x : e)
-            if (existing.count(x)) {
-                overlap = true;
-                break;
-            }
-        if (overlap) continue;
-        auto nb = buildBlocked(b, {w}, false);
-        if (bfsDist(b, b.turn, nb)[b.me.first][b.me.second] >= INF) continue;
-        if (bfsDist(b, 1 - b.turn, nb)[b.opp.first][b.opp.second] >= INF) continue;
+        if (!checkWall(bb, w, true).ok) continue;
         out.push_back(w);
     }
     return out;
@@ -114,7 +104,7 @@ int main() {
             } else if ((sk == "free_wall" || sk == "l_remodel") &&
                        (b.wallsLeft > 0 || b.freeWall)) {
                 bool allowL = sk == "l_remodel" || b.lBonus > 0;
-                auto cands = legalWallCands(b, allowL);
+                auto cands = legalWallCands(b, allowL, sk == "l_remodel" ? 1 : -1);
                 // l_remodel 现打现放：只选 L 墙；free_wall：只选直墙
                 std::vector<WallSpec> fit;
                 for (auto &w : cands)

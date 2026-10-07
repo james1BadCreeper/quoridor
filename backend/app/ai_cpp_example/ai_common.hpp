@@ -259,4 +259,68 @@ static json wallJson(const WallSpec &w) {
     return o;
 }
 
+// ---------------- 动作合法性总检（复刻引擎 apply_* 校验） ----------------
+
+struct ActionCheck {
+    bool ok = false;
+    std::string reason;  // ok=false 时为中文原因，可直接打日志
+};
+
+// 走子是否合法：在合法走子集内（含跳子；穿墙 buff 下按无视墙视角）。
+static ActionCheck checkMove(const Board &b, Cell to) {
+    ActionCheck r;
+    auto legal = stepNeighbors(b, b.me, b.me, b.opp, buildBlocked(b, {}, b.phased));
+    if (std::find(legal.begin(), legal.end(), to) == legal.end()) {
+        r.reason = "非法走子（不在合法走子集内：可能撞墙/进死点/停留对方格）";
+        return r;
+    }
+    r.ok = true;
+    return r;
+}
+
+// 放墙是否合法：余墙（免费墙除外）、L 券、范围内、不与已有墙重边。
+// forbidSurround=true 时还要求放墙后双方仍有路：
+//   引擎本身允许围死（被围者按规则 4 直接获胜），所以该检查只是 AI 自保；
+//   若“执意”围死（如算清对方被围后自己仍能赢），传 false 跳过此项即可。
+static ActionCheck checkWall(const Board &b, const WallSpec &w, bool forbidSurround = true) {
+    ActionCheck r;
+    if (w.kind == "L" && b.lBonus <= 0) {
+        r.reason = "无 L 墙放置权（需先打出改造技能）";
+        return r;
+    }
+    if (!b.freeWall && b.wallsLeft <= 0) {
+        r.reason = "该玩家无剩余墙";
+        return r;
+    }
+    if (!wallInBounds(b, w)) {
+        r.reason = "墙位置越界";
+        return r;
+    }
+    std::set<std::pair<Cell, Cell>> e;
+    wallEdges(e, w.wr, w.wc, w.kind, w.ori, w.arm);
+    if (e.empty()) {
+        r.reason = "未知墙类型";
+        return r;
+    }
+    auto existing = buildBlocked(b, {}, false);
+    for (auto &x : e)
+        if (existing.count(x)) {
+            r.reason = "与已有墙重叠（复用边）";
+            return r;
+        }
+    if (forbidSurround) {
+        auto nb = buildBlocked(b, {w}, false);
+        if (bfsDist(b, b.turn, nb)[b.me.first][b.me.second] >= INF) {
+            r.reason = "放墙后己方无路（会被围死而对方直接获胜）";
+            return r;
+        }
+        if (bfsDist(b, 1 - b.turn, nb)[b.opp.first][b.opp.second] >= INF) {
+            r.reason = "放墙后对方无路（对方被围死将直接获胜；执意围死可关掉 forbidSurround）";
+            return r;
+        }
+    }
+    r.ok = true;
+    return r;
+}
+
 #endif  // QUORIDOR_AI_COMMON_HPP
