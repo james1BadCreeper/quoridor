@@ -330,3 +330,18 @@ def test_surround_wins_for_victim():
     # 先手可能仍有绕行路；若真被围死则先手获胜（按规则4）
     # 本测试仅保证函数不抛错且状态一致
     assert st.winner in (None, 0, 1)
+
+
+def test_to_dict_viewer_strips_opponent():
+    """视角序列化：剥离对方手牌与对方选牌内容，全量默认不变。"""
+    st = new_game(n=9, m=9, seed=7)
+    select_skills(st, 0, ["double_move"] * st.skill_k)
+    select_skills(st, 1, ["phase_walk"] * st.skill_k)
+    full = st.to_dict()
+    assert full["hands"][1] == {"phase_walk": 2}
+    v0 = st.to_dict(viewer=0)
+    assert v0["hands"] == [{"double_move": 2}, {}]
+    got = [h.get("skills") for h in v0["history"] if h["type"] == "select_skills"]
+    assert got == [["double_move"] * st.skill_k, []]
+    v1 = st.to_dict(viewer=1)
+    assert v1["hands"] == [{}, {"phase_walk": 2}]

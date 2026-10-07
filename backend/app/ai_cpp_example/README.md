@@ -99,7 +99,7 @@ Board b = parseBoard(j);   // j 为输入 json，b.turn 即本 AI 执子
 | `deads` | `[r,c][]` | 死点格 |
 | `sands` | `[r,c][]` | 流沙格 |
 | `goal_A`、`goal_B` | int[] | 获胜列；先手目标底行 ∈ A，后手目标顶行 ∈ B |
-| `hands` | `[object,object]` | 双方手牌 `{技能id: 张数}`（棋谱对 AI 全量返回；前端展示时对人类隐藏 AI 手牌） |
+| `hands` | `[object,object]` | 双方手牌 `{技能id: 张数}`（传给 AI 的是其视角：对方手牌恒为空，只能看到自己的） |
 | `phase_buff` | `[bool,bool]` | 穿墙 buff（下次走子无视墙，仍不能进死点） |
 | `free_buff` | `[bool,bool]` | 免费墙 buff（下次放墙不耗存量） |
 | `l_bonus` | `[int,int]` | L 墙放置权（打出改造获得） |
@@ -127,7 +127,7 @@ history 条目（`type` 区分）：
 | `move` | `to:[r,c]` | 走子（含跳子落点） |
 | `wall` | `wall:{...}` | 放墙（同 wall 对象） |
 | `skill` | `skill:id`，流沙陷阱另带 `to:[r,c]` | 打出手牌（双方得知） |
-| `select_skills` | `skills:[...]` | 赛前选牌（注意：条目含完整牌内容，复盘可见） |
+| `select_skills` | `skills:[...]` | 赛前选牌（传给 AI 的视角中对方内容为空；全量导出/回放可见） |
 | `quicksand` | — | 踩中流沙，对方连续行动两次 |
 
 输出（**一行** json）：

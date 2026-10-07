@@ -260,12 +260,14 @@ def post_ai_side(req: AISideRequest) -> dict:
 
 
 @app.get("/api/games/{gid}/export")
-def export_game(gid: str) -> dict:
-    """导出 json 格式棋谱（可直接保存回放）。"""
+def export_game(gid: str, viewer: int | None = None) -> dict:
+    """导出 json 格式棋谱（可直接保存回放）。viewer=0/1 时按该视角剥离对方手牌与选牌内容。"""
     st = GAMES.get(gid)
     if st is None:
         raise HTTPException(404, "对局不存在")
-    return st.to_dict()
+    if viewer is not None and viewer not in (0, 1):
+        raise HTTPException(400, "viewer 须为 0 或 1")
+    return st.to_dict(viewer=viewer)
 
 
 @app.post("/api/games/import")

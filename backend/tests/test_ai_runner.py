@@ -141,3 +141,16 @@ def test_ai_goals_and_side():
     body = r.json()
     assert body["chooser"] == "white" and body["picker_side"] in ("first", "second")
     assert body["winner"] in (0, 1, -1) and len(body["goal_A"]) == 4
+
+
+def test_export_viewer():
+    c = TestClient(app)
+    g = c.post("/api/games/new", json={"n": 9, "m": 9, "seed": 7}).json()
+    gid, k = g["id"], g["state"]["skill_k"]
+    c.post(f"/api/games/{gid}/skills/select", json={"player": 0, "skills": ["double_move"] * k})
+    c.post(f"/api/games/{gid}/skills/select", json={"player": 1, "skills": ["phase_walk"] * k})
+    full = c.get(f"/api/games/{gid}/export").json()
+    assert full["hands"][0] == {"double_move": 2}
+    v1 = c.get(f"/api/games/{gid}/export?viewer=1").json()
+    assert v1["hands"] == [{}, {"phase_walk": 2}]
+    assert c.get(f"/api/games/{gid}/export?viewer=2").status_code == 400

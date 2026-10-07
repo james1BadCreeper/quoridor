@@ -237,7 +237,7 @@ def _step_side(side: str, st: engine.GameState, timeout: float) -> dict:
     if side == "random":
         side = RANDOM_SIDE
     played = None
-    d = run_ai(side, st.to_dict(), timeout)
+    d = run_ai(side, st.to_dict(viewer=st.turn), timeout)
     if not isinstance(d, dict):
         raise AIError(f"决策须为 json 对象：{str(d)[:200]}")
     if "skill" in d:

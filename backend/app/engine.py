@@ -96,7 +96,18 @@ class GameState:
     must_move: bool = False  # 连续行动中：只能走子不能放墙
     seq_skill_used: bool = False  # 当前行动序列中是否已打出过技能卡
 
-    def to_dict(self) -> dict:
+    def to_dict(self, viewer: int | None = None) -> dict:
+        """序列化棋谱。viewer 指定视角方时，剥离对方手牌与对方选牌内容（防 AI 作弊读牌；
+        回放/导出默认 viewer=None 全量）。
+        """
+        hands = self.hands
+        history = self.history
+        if viewer in (0, 1):
+            hands = [dict(h) if i == viewer else {} for i, h in enumerate(self.hands)]
+            history = [
+                {**h, "skills": []} if h.get("type") == "select_skills" and h.get("player") != viewer else h
+                for h in self.history
+            ]
         return {
             "n": self.n,
             "m": self.m,
@@ -112,9 +123,9 @@ class GameState:
             "bonus_moves": self.bonus_moves,
             "winner": self.winner,
             "win_reason": self.win_reason,
-            "history": self.history,
+            "history": history,
             "skill_k": self.skill_k,
-            "hands": self.hands,
+            "hands": hands,
             "skills_picked": self.skills_picked,
             "started": self.started,
             "l_bonus": self.l_bonus,
