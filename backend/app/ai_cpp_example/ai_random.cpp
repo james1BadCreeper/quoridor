@@ -36,6 +36,7 @@ static std::vector<WallSpec> legalWallCands(const Board &b, bool allowL, int lBo
 int main() {
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
+    
     std::string input((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
     if (input.empty()) {
         std::cout << "{\"type\":\"move\",\"to\":[1,4]}";

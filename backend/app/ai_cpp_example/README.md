@@ -11,7 +11,7 @@ AI 是一个程序：从 stdin 读入一个 json，向 stdout 输出一行决策
 | `ai_random.cpp` | 随机示例（合法性优先，弱策略也必须输出合法） |
 | `ai_common.hpp` | 公共库，见下 |
 | `json.hpp` | nlohmann/json 单头文件，上传时**无需打包**（后端自动提供；自带同名文件则以你的为准） |
-| `Dockerfile[.random]`／`build.sh`／`run.sh` | 容器内编译＋沙箱运行脚本 |
+| `Dockerfile[.random]`／`build.sh`／`run.sh` | 内部构建脚本（用户测试走前端上传，无需使用） |
 
 ## `ai_common.hpp` 用法
 
@@ -32,6 +32,32 @@ Board b = parseBoard(j);   // j 为输入 json，b.turn 即本 AI 执子
 | `rng()` | 随机数引擎 |
 
 注意：json 取值一律用 `getInt/getStr` 或显式转换（nlohmann 的算术转换是 explicit 的）。
+
+## JSON 解析（`json.hpp`，nlohmann/json）
+
+```cpp
+#include "ai_common.hpp"  // 已含 json.hpp，别名 json = nlohmann::json
+
+// 读：整段 stdin 一次解析，失败直接给兜底（崩溃/无输出判负）
+json j = json::parse(input, nullptr, false);
+if (j.is_discarded()) { /* 输出兜底决策 */ }
+
+// 读字段：先判类型再转；缺字段给缺省
+int m = getInt(j, "m", 9);                    // 数字，无则 9
+std::string arm = getStr(w, "arm", "NW");     // 字符串；后端直墙的 arm 为 null，按缺省走
+for (auto &d : j.value("deads", json::array()))
+    if (d.is_array() && d.size() == 2) deads.insert({(int)d[0], (int)d[1]});
+
+// 写：直接构造，最后一行 dump 输出
+json out = {{"type", "move"}, {"to", {r, c}}};
+std::cout << out.dump();
+```
+
+三条铁律：
+
+1. **一律显式转换**——`(int)x`、`(std::string)x`、`x.is_number()` 先判后取；隐式塞进 `pair`/容器会触发整对象转换导致崩溃（真实踩坑）。
+2. **可空字段先判**——如墙的 `arm` 为 null 时必须走缺省，不能直接 `w.value("arm", "NW")`。
+3. **输出必须一行合法 json**——多余 `cout` 调试信息会导致解析失败判负；`hands` 等数组按下标取前先判长度。
 
 ## 输入输出格式
 
@@ -141,12 +167,12 @@ history 条目（`type` 区分）：
 
 判负：输出非法 json、选牌/出题/选边/行动非法、进程崩溃、无输出、超时。
 
-## 编译、测试、上传
+## 上传与对战
+
+在前端开局向导的 AI 席位旁点「上传 AI」，选择 zip（只需你自己的源码）即可测试；
+编译通过后自动选中，直接开局或 AI 走到底。接口方式：
 
 ```bash
-./build.sh                            # 容器内编译两个示例
-./run.sh < kifu.json                  # 沙箱跑贪心示例（`./run.sh random` 跑随机示例）
-echo '{"phase":"select","skill_k":2}' | ./run.sh   # 选牌自测
 zip my_ai.zip my_ai.cpp               # 只需打包你自己的源码（ai_common.hpp/json.hpp 后端自动提供）
 curl -F "file=@my_ai.zip" http://127.0.0.1:8000/api/ai/upload        # → aid
 curl -X POST http://127.0.0.1:8000/api/ai/match \
