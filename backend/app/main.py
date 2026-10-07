@@ -1,8 +1,7 @@
-"""FastAPI 入口：对局创建、走子/放墙、合法动作、随机 AI、外部 AI 上传对战、棋谱导入导出。"""
+"""FastAPI 入口：对局创建、走子/放墙、合法动作、外部 AI 上传对战、棋谱导入导出。"""
 
 from __future__ import annotations
 
-import random
 import uuid
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -20,21 +19,17 @@ from .engine import (
     legal_pawn_moves,
     new_game,
     play_skill,
-    random_ai_move,
-    random_ai_skill,
-    random_skill_picks,
     select_skills,
 )
 from .models import (
-    AIRequest,
     AIGoalsRequest,
     AISideRequest,
     ExternalMoveRequest,
     MatchRequest,
     NewGameRequest,
     PawnMoveRequest,
+    SkillAISelectRequest,
     SkillPlayRequest,
-    SkillRandomRequest,
     SkillSelectRequest,
     WallDTO,
 )
@@ -129,41 +124,6 @@ def preview_wall(gid: str, req: WallDTO) -> dict:
     return {"legal": ok, "message": msg}
 
 
-@app.post("/api/games/{gid}/ai-move")
-def post_ai_move(gid: str, req: AIRequest) -> dict:
-    """示例随机 AI 落子（人类/AI 混战、AI 对 AI 演示用），偶尔会打出手牌。"""
-    st = GAMES.get(gid)
-    if st is None:
-        raise HTTPException(404, "对局不存在")
-    if st.winner is not None:
-        raise HTTPException(400, "对局已结束")
-    if not st.started:
-        raise HTTPException(400, "双方选完技能卡后方可行动")
-    rng = random.Random(req.seed)
-    played = None
-    try:
-        decision = random_ai_skill(st, rng)
-        if decision is not None:
-            play_skill(st, decision["skill"], decision["to"])
-            played = decision
-        # 连续行动中只能走子
-        if st.must_move:
-            moves = legal_pawn_moves(st, st.turn)
-            if not moves:
-                raise HTTPException(400, "无合法走子")
-            apply_pawn_move(st, list(rng.choice(moves)))
-            action = {"player": st.turn, "type": "move"}
-        else:
-            action = random_ai_move(st, rng)
-            if action["type"] == "move":
-                apply_pawn_move(st, action["to"])
-            else:
-                apply_wall(st, Wall.from_dict(action["wall"]))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"id": gid, "action": action, "skill": played, "state": st.to_dict()}
-
-
 @app.get("/api/skills")
 def list_skills() -> dict:
     """技能卡一览（含中文名与描述，供前端选牌）。"""
@@ -183,16 +143,16 @@ def post_skill_select(gid: str, req: SkillSelectRequest) -> dict:
     return {"id": gid, "state": st.to_dict()}
 
 
-@app.post("/api/games/{gid}/skills/random")
-def post_skill_random(gid: str, req: SkillRandomRequest) -> dict:
-    """为某玩家随机选技能卡（AI 席位用）。"""
+@app.post("/api/games/{gid}/skills/ai-select")
+def post_skill_ai_select(gid: str, req: SkillAISelectRequest) -> dict:
+    """AI 席位赛前选技能卡：跑该 AI 的选牌阶段容器（开局向导用）。"""
     st = GAMES.get(gid)
     if st is None:
         raise HTTPException(404, "对局不存在")
     try:
-        picks = random_skill_picks(st.skill_k, random.Random(req.seed))
+        picks = ai_runner.select_for(req.aid, st, req.timeout)
         select_skills(st, req.player, picks)
-    except ValueError as e:
+    except (AIError, ValueError) as e:
         raise HTTPException(400, str(e))
     return {"id": gid, "picks": picks, "state": st.to_dict()}
 

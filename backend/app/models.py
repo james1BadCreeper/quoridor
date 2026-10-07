@@ -25,18 +25,15 @@ class PawnMoveRequest(BaseModel):
     to: list[int]  # [r, c]
 
 
-class AIRequest(BaseModel):
-    seed: int | None = None
-
-
 class SkillSelectRequest(BaseModel):
     player: int
     skills: list[str]
 
 
-class SkillRandomRequest(BaseModel):
+class SkillAISelectRequest(BaseModel):
     player: int
-    seed: int | None = None
+    aid: str  # 跑该 AI 的选牌阶段容器
+    timeout: float = 5
 
 
 class SkillPlayRequest(BaseModel):

@@ -20,13 +20,12 @@ export const apiLegal = (gid, player) =>
   req(`/api/games/${gid}/legal-moves?player=${player}`).then((j) => ({ moves: j.moves || [], phased: !!j.phased }));
 export const apiMovePawn = (gid, to) => req(`/api/games/${gid}/moves/pawn`, json({ to }));
 export const apiPlaceWall = (gid, wall) => req(`/api/games/${gid}/moves/wall`, json(wall));
-export const apiAiMove = (gid) => req(`/api/games/${gid}/ai-move`, json({}));
 export const apiImport = (state) => req('/api/games/import', json(state));
 export const apiSkills = () => req('/api/skills').then((j) => j.skills);
 export const apiSkillSelect = (gid, player, skills) =>
   req(`/api/games/${gid}/skills/select`, json({ player, skills }));
-export const apiSkillRandom = (gid, player) =>
-  req(`/api/games/${gid}/skills/random`, json({ player }));
+export const apiSkillAiSelect = (gid, player, aid) =>
+  req(`/api/games/${gid}/skills/ai-select`, json({ player, aid }));
 export const apiSkillPlay = (gid, skill, to) =>
   req(`/api/games/${gid}/skills/play`, json({ skill, to: to ?? null }));
 export const apiAiList = () => req('/api/ai/list').then((j) => j.ais || []);

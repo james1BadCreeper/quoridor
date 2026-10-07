@@ -75,7 +75,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   const [seed, setSeed] = useState('');
   const [names, setNames] = useState(['红方', '蓝方']);
   const [ptypes, setPtypes] = useState(['human', 'human']);
-  const [aiIds, setAiIds] = useState(['random', 'random']); // AI 席位来源：random=引擎随机基线，或 aid
+  const [aiIds, setAiIds] = useState(['builtin-random', 'builtin-random']); // AI 席位来源（后端 aid）
   const [aiOptions, setAiOptions] = useState([]); // 后端默认 + 已上传 AI 列表
   const [uploading, setUploading] = useState(false);
   const [aiBusy, setAiBusy] = useState(false); // 等待 AI 出题/选边
@@ -130,9 +130,8 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
     const ch = Math.random() < 0.5 ? 0 : 1;
     setFn(nn); setFm(mm); setChooser(ch);
     (async () => {
-      // 出题：人类手动 / 引擎随机本地出 / 容器 AI 调后端出题
+      // 出题：人类手动 / AI 调后端出题容器
       if (ptypes[ch] === 'human') { setGoalA([]); setGoalB([]); }
-      else if (aiIds[ch] === 'random') { const g = randomGoals(mm); setGoalA(g.a); setGoalB(g.b); }
       else {
         setAiBusy(true);
         try {
@@ -141,19 +140,17 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
         } catch (e) { alert(`AI 出题失败，已改用随机：${e.message}`); const g = randomGoals(mm); setGoalA(g.a); setGoalB(g.b); }
         finally { setAiBusy(false); }
       }
-      if (ptypes[1 - ch] === 'ai' && aiIds[1 - ch] === 'random')
-        setSide(Math.random() < 0.5 ? 'first' : 'second');
-      else setSide(null);
+      setSide(null); // 选边在步骤 2 完成（人类点选 / AI 调后端）
       setAiPickedSide(false);
       setStep(1);
     })();
   }
 
-  // 进入选边步骤时，容器 AI 自动选边一次
+  // 进入选边步骤时，AI 自动选边一次
   useEffect(() => {
     if (step !== 2) return;
     const p = picker;
-    if (ptypes[p] !== 'ai' || aiIds[p] === 'random' || aiPickedSide || aiBusy) return;
+    if (ptypes[p] !== 'ai' || aiPickedSide || aiBusy) return;
     setAiBusy(true);
     apiAiSide(aiIds[p], { n: fn, m: fm, deads: [], sands: [], goal_A: goalA, goal_B: goalB })
       .then((s) => { setSide(s); setAiPickedSide(true); })
@@ -201,7 +198,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
       // 人类席位用所选牌，AI 席位传 null（由后端随机）
       skillPicks: [ptypes[0] === 'human' ? skillPicks[0] : null,
                    ptypes[1] === 'human' ? skillPicks[1] : null],
-      // 每席 AI 来源：random=引擎随机基线，否则为后端 aid（含内置与上传）
+      // 每席 AI 来源（后端 aid，含内置与上传）
       seatAIs: [cfg_ai(0), cfg_ai(1)],
     });
 
@@ -253,7 +250,6 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
                   <>
                     <select value={aiIds[i]}
                       onChange={(e) => setAiIds(aiIds.map((v, j) => (j === i ? e.target.value : v)))}>
-                      <option value="random">随机基线（引擎内置）</option>
                       {aiOptions.map((a) => (
                         <option key={a.aid} value={a.aid}>
                           {a.name}{a.builtin ? '' : '（已上传）'}{a.built ? '' : '（未编译）'}
@@ -292,7 +288,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
               onClear={() => { setGoalA([]); setGoalB([]); }} />
           ) : (
             <div>
-              <p className="muted">AI 已{aiIds[chooser] === 'random' ? '随机' : ''}出题：A = [{goalA.join(', ')}]，B = [{goalB.join(', ')}]</p>
+              <p className="muted">AI 已出题：A = [{goalA.join(', ')}]，B = [{goalB.join(', ')}]</p>
               <button className="btn ghost" onClick={() => { const g = randomGoals(fm); setGoalA(g.a); setGoalB(g.b); }}>
                 重新随机
               </button>
@@ -320,13 +316,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
               <span>底行出发，目标顶行列 [{goalB.join(', ')}]</span>
             </button>
           </div>
-          {ptypes[picker] === 'ai' && aiIds[picker] === 'random' && (
-            <div className="rowbtns">
-              <span className="muted">AI 已随机选边：{side === 'first' ? '先手 + A' : '后手 + B'}</span>
-              <button className="btn ghost" onClick={() => setSide(side === 'first' ? 'second' : 'first')}>重新随机</button>
-            </div>
-          )}
-          {ptypes[picker] === 'ai' && aiIds[picker] !== 'random' && (
+          {ptypes[picker] === 'ai' && (
             <div className="rowbtns">
               {aiBusy
                 ? <span className="muted">AI 正在选边…</span>

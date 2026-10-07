@@ -215,11 +215,14 @@ def ai_side(aid: str, n: int, m: int, deads: set, sands: set,
     return side
 
 
-def _select_for(side: str, st: engine.GameState, timeout: float) -> list[str]:
-    """某席位的赛前选牌：aid 跑选牌阶段容器，random 用引擎随机。"""
+# "random" 为保留别名：指向容器随机示例（引擎内置 Python 随机已删除）。
+RANDOM_SIDE = "builtin-random"
+
+
+def select_for(side: str, st: engine.GameState, timeout: float) -> list[str]:
+    """某席位的赛前选牌：跑选牌阶段容器（random 即容器随机）。"""
     if side == "random":
-        import random as _random
-        return engine.random_skill_picks(st.skill_k, _random.Random())
+        side = RANDOM_SIDE
     out = run_ai(side, {"phase": "select", "skill_k": st.skill_k, "n": st.n, "m": st.m,
                         "deads": sorted(st.deads), "sands": sorted(st.sands),
                         "goal_A": st.goal_A, "goal_B": st.goal_B}, timeout)
@@ -229,34 +232,21 @@ def _select_for(side: str, st: engine.GameState, timeout: float) -> list[str]:
     return skills
 
 
-def _step_side(side: str, st: engine.GameState, rng, timeout: float) -> dict:
+def _step_side(side: str, st: engine.GameState, timeout: float) -> dict:
     """某席位行动一步并落到引擎；返回 {"skill":..,"action":..} 摘要。"""
-    import random as _random
-    rng = rng or _random.Random()
-    played = None
     if side == "random":
-        decision = engine.random_ai_skill(st, rng)
-        if decision is not None:
-            engine.play_skill(st, decision["skill"], decision["to"])
-            played = decision
-        if st.must_move:
-            moves = engine.legal_pawn_moves(st, st.turn)
-            if not moves:
-                raise AIError("无合法走子")
-            engine.apply_pawn_move(st, list(rng.choice(moves)))
-            return {"player": st.turn, "type": "move", "skill": played}
-        action = engine.random_ai_move(st, rng)
-    else:
-        d = run_ai(side, st.to_dict(), timeout)
-        if not isinstance(d, dict):
-            raise AIError(f"决策须为 json 对象：{str(d)[:200]}")
-        if "skill" in d:
-            try:
-                engine.play_skill(st, d["skill"], d.get("to"))
-            except ValueError as e:
-                raise AIError(f"打出手牌非法（{d.get('skill')}）：{e}")
-            played = {"skill": d["skill"], "to": d.get("to")}
-        action = d.get("action", d)
+        side = RANDOM_SIDE
+    played = None
+    d = run_ai(side, st.to_dict(), timeout)
+    if not isinstance(d, dict):
+        raise AIError(f"决策须为 json 对象：{str(d)[:200]}")
+    if "skill" in d:
+        try:
+            engine.play_skill(st, d["skill"], d.get("to"))
+        except ValueError as e:
+            raise AIError(f"打出手牌非法（{d.get('skill')}）：{e}")
+        played = {"skill": d["skill"], "to": d.get("to")}
+    action = d.get("action", d)
     if not isinstance(action, dict) or action.get("type") == "skill":
         raise AIError(f"行动非法：{str(action)[:200]}")
     try:
@@ -321,18 +311,17 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
                 return {"winner": st.winner, "win_reason": st.win_reason, "plies": 0,
                         "sides": sides, "state": st.to_dict()}
         try:
-            engine.select_skills(st, pl, _select_for(side, st, timeout))
+            engine.select_skills(st, pl, select_for(side, st, timeout))
         except AIError as e:
             st.winner = 1 - pl
             st.win_reason = f"{'先手' if pl == 0 else '后手'}AI 选牌犯规：{e}"
             return {"winner": st.winner, "win_reason": st.win_reason, "plies": 0,
                     "sides": sides, "state": st.to_dict()}
-    rng = _random.Random(seed)
     plies = 0
     while st.winner is None and plies < max_plies:
         side = sides[st.turn]
         try:
-            _step_side(side, st, rng, timeout)
+            _step_side(side, st, timeout)
         except AIError as e:
             st.winner = 1 - st.turn
             st.win_reason = f"{'先手' if st.turn == 0 else '后手'}AI 犯规：{e}"

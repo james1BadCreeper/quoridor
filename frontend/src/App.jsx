@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import Board from './components/Board.jsx';
 import SetupWizard from './components/SetupWizard.jsx';
 import {
-  apiAiMove, apiExternalMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall,
-  apiSkillPlay, apiSkillRandom, apiSkillSelect, apiSkills,
+  apiExternalMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall,
+  apiSkillAiSelect, apiSkillPlay, apiSkillSelect, apiSkills,
   sandLocalLegal, wallLocalLegal,
 } from './api.js';
 
@@ -40,7 +40,7 @@ export default function App() {
   const [ghost, setGhost] = useState(null);
   const [seatNames, setSeatNames] = useState(['先手', '后手']);
   const [seatTypes, setSeatTypes] = useState(['human', 'human']);
-  const [seatAIs, setSeatAIs] = useState(['random', 'random']); // AI 席位来源：random 或后端 aid
+  const [seatAIs, setSeatAIs] = useState(['builtin-random', 'builtin-random']); // AI 席位来源（后端 aid）
   const [autoAI, setAutoAI] = useState(false);
   const [busy, setBusy] = useState(false);
   const [skillDefs, setSkillDefs] = useState({});
@@ -87,20 +87,20 @@ export default function App() {
       const j = await apiNew({ n: cfg.n, m: cfg.m, seed: cfg.seed, goal_A: cfg.goal_A, goal_B: cfg.goal_B });
       const names = [cfg.participants[cfg.seatOf[0]].name, cfg.participants[cfg.seatOf[1]].name];
       const types = [cfg.participants[cfg.seatOf[0]].type, cfg.participants[cfg.seatOf[1]].type];
-      // 双方选技能卡：人类用向导所选，AI 随机（cfg.skillPicks[participantIdx]，AI 席为 null）
+      // 双方选技能卡：人类用向导所选，AI 跑各自的选牌阶段容器
       let cur = j.state;
       for (let seat = 0; seat < 2; seat++) {
         const p = cfg.seatOf[seat];
         if (cfg.skillPicks[p]) {
           cur = (await apiSkillSelect(j.id, seat, cfg.skillPicks[p])).state;
         } else {
-          cur = (await apiSkillRandom(j.id, seat)).state;
+          cur = (await apiSkillAiSelect(j.id, seat, cfg.seatAIs[seat])).state;
         }
       }
       setGid(j.id);
       setSeatNames(names);
       setSeatTypes(types);
-      setSeatAIs(cfg.seatAIs ?? ['random', 'random']);
+      setSeatAIs(cfg.seatAIs ?? ['builtin-random', 'builtin-random']);
       setSnaps([cur]);
       setStep(0);
       setState(cur);
@@ -148,10 +148,9 @@ export default function App() {
 
   async function aiOnce(g) {
     const st = stateRef.current;
-    const aid = st ? aisRef.current[st.turn] : 'random';
-    const j = (aid && aid !== 'random')
-      ? await apiExternalMove(g ?? gidRef.current, aid)
-      : await apiAiMove(g ?? gidRef.current);
+    // AI 席位跑各自容器；人类回合点“AI 行棋”则由随机示例代走
+    const aid = (st && aisRef.current[st.turn]) || 'builtin-random';
+    const j = await apiExternalMove(g ?? gidRef.current, aid);
     appendSnap(j.state);
     return j.state;
   }
@@ -196,7 +195,7 @@ export default function App() {
         setSnaps(j.snaps);
         setStep(0);
         setState(j.snaps[j.snaps.length - 1]);
-        if (j.meta) { setSeatNames(j.meta.seatNames); setSeatTypes(j.meta.seatTypes); setSeatAIs(j.meta.seatAIs ?? ['random', 'random']); }
+        if (j.meta) { setSeatNames(j.meta.seatNames); setSeatTypes(j.meta.seatTypes); setSeatAIs(j.meta.seatAIs ?? ['builtin-random', 'builtin-random']); }
         setGid(null);
         setWizardOpen(false);
       } else {

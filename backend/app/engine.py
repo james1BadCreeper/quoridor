@@ -554,13 +554,6 @@ def select_skills(state: GameState, player: int, picks: list[str]) -> GameState:
     return state
 
 
-def random_skill_picks(skill_k: int, rng: random.Random | None = None) -> list[str]:
-    """随机选 k 张技能卡（可重复）。"""
-    rng = rng or random.Random()
-    ids = list(SKILLS.keys())
-    return [rng.choice(ids) for _ in range(skill_k)]
-
-
 def play_skill(
     state: GameState,
     skill: str,
@@ -616,60 +609,3 @@ def play_skill(
     state.history.append(entry)
     return state
 
-
-def random_sand_cell(state: GameState, rng: random.Random) -> list[int] | None:
-    """为示例 AI 随机找一个合法的流沙落点，找不到返回 None。"""
-    goals = goal_cells(state)
-    for _ in range(50):
-        r, c = rng.randrange(state.n), rng.randrange(state.m)
-        if (r, c) in state.deads or (r, c) in state.sands:
-            continue
-        if [r, c] in state.pawns or (r, c) in goals:
-            continue
-        return [r, c]
-    return None
-
-
-def random_ai_skill(state: GameState, rng: random.Random | None = None) -> dict | None:
-    """示例 AI 的技能决策：25% 概率打出一张手牌（无牌或序列已用过则返回 None）。"""
-    rng = rng or random.Random()
-    player = state.turn
-    if state.seq_skill_used or not state.hands[player]:
-        return None
-    if rng.random() >= 0.25:
-        return None
-    skill = rng.choice(sorted(state.hands[player].keys()))
-    to = None
-    if skill == "make_sand":
-        to = random_sand_cell(state, rng)
-        if to is None:
-            return None
-    return {"skill": skill, "to": to}
-
-
-def random_ai_move(state: GameState, rng: random.Random | None = None) -> dict:
-    """示例 AI：随机走子或随机放墙（有 L 放置权时也可能放 L 墙）。"""
-    rng = rng or random.Random()
-    player = state.turn
-    # 穿墙 buff 生效中则按无视墙选步（否则 buff 会被浪费）
-    moves = legal_pawn_moves(state, player, ignore_walls=state.phase_buff[player])
-    # 30% 尝试放墙（若有余墙或免费墙）
-    if (state.walls_left[player] > 0 or state.free_buff[player]) and rng.random() < 0.3:
-        for _ in range(50):
-            roll = rng.random()
-            if state.l_bonus[player] > 0 and roll < 0.25:
-                w = Wall(wr=rng.randint(1, state.n - 1), wc=rng.randint(1, state.m - 1),
-                         orientation=None, kind="L",
-                         arm=rng.choice(["NW", "NE", "SW", "SE"]))
-            elif roll < 0.6:
-                w = Wall(wr=rng.randint(1, state.n - 1),
-                         wc=rng.randint(0, state.m - 2), orientation="H")
-            else:
-                w = Wall(wr=rng.randint(0, state.n - 2),
-                         wc=rng.randint(1, state.m - 1), orientation="V")
-            ok, _ = is_wall_legal(state, player, w, free=state.free_buff[player])
-            if ok:
-                return {"player": player, "type": "wall", "wall": w.to_dict()}
-    if not moves:
-        raise ValueError("无合法走子")
-    return {"player": player, "type": "move", "to": list(rng.choice(moves))}
