@@ -224,7 +224,7 @@ label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color:
 .history > div.side1 { border-right: 3px solid rgba(96, 165, 250, .55); }
 
 /* 地形预览（向导出题/选边/选牌） */
-.maprev { margin: 10px 0; }
+.maprev { margin: 10px auto; width: fit-content; display: flex; flex-direction: column; align-items: center; }
 .pvgrid { display: grid; gap: 2px; width: fit-content; max-width: 100%; }
 .pvcell {
   width: 16px; height: 16px; border-radius: 3px; background: #22304f;
