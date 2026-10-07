@@ -94,10 +94,9 @@ int main() {
         return 0;
     }
 
-    // ===== 阶段二：行动 =====
+    // ===== 阶段二：行动（一次输出覆盖整轮；连续行动须一次输出两步） =====
     Board b = parseBoard(j);
-    bool canSkill = !b.seqSkillUsed;
-    auto useSkill = [&](const std::string &s) { return canSkill && b.hand.count(s) && b.hand[s] > 0; };
+    auto useSkill = [&](const std::string &s) { return b.hand.count(s) && b.hand[s] > 0; };
 
     auto blocked = buildBlocked(b, {}, b.phased);
     auto legal = stepNeighbors(b, b.me, b.me, b.opp, blocked);
@@ -110,14 +109,6 @@ int main() {
     auto distOpp = bfsDist(b, 1 - b.turn, blockedOpp);
     int myD = distMe[b.me.first][b.me.second];
     int oppD = distOpp[b.opp.first][b.opp.second];
-
-    // 连续行动序列中只能走子
-    if (b.mustMove) {
-        Cell s = bestStep(b, distMe, legal);
-        json out = decision("", json(nullptr), {moveAct(s.first, s.second)});
-        std::cout << checked(b, out, legal).dump();
-        return 0;
-    }
 
     // --- 技能 1：流沙陷阱（对方有明确短路时，在其下一步埋雷） ---
     if (useSkill("make_sand") && oppD < INF) {

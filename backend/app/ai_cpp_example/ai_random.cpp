@@ -91,17 +91,8 @@ int main() {
     };
     auto pickMove = [&](bool phased) { return pickFrom(b, phased); };
 
-    // 连续行动序列中只能走子
-    if (b.mustMove) {
-        Cell s = pickMove(b.phased);
-        if (s.first < 0) s = b.me;
-        json out = decision("", json(nullptr), {moveAct(s.first, s.second)});
-        std::cout << checked(b, out, legal0).dump();
-        return 0;
-    }
-
-    // 20% 随机打出一张手牌（本序列未用过时）
-    if (!b.seqSkillUsed && !b.hand.empty() && rng()() % 100 < 20) {
+    // 20% 随机打出一张手牌
+    if (!b.hand.empty() && rng()() % 100 < 20) {
         std::vector<std::string> owned;
         for (auto &[id, cnt] : b.hand)
             if (cnt > 0) owned.push_back(id);
@@ -160,8 +151,7 @@ int main() {
             if (w.kind == "straight") straights.push_back(w);
         if (!straights.empty()) {
             const WallSpec &w = straights[rng()() % straights.size()];
-            if (b.freeWall && b.hand.count("free_wall") && b.hand["free_wall"] > 0 &&
-                !b.seqSkillUsed) {
+            if (b.freeWall && b.hand.count("free_wall") && b.hand["free_wall"] > 0) {
                 json out = decision("free_wall", json(nullptr), {wallAct(wallJson(w))});
                 std::cout << checked(b, out, legal0).dump();
                 return 0;

@@ -167,3 +167,20 @@ def test_upload_without_common_headers(tmp_path, monkeypatch):
     assert r.status_code == 200, r.text
     assert r.json()["built"] is True
     subprocess.run(["docker", "rmi", ai_runner.image_tag(r.json()["aid"])], capture_output=True, timeout=60)
+
+
+@needs_docker
+def test_double_requires_two_actions(tmp_path, monkeypatch):
+    """连续行动只给一步直接判负（400）。"""
+    monkeypatch.setattr(ai_runner, "AI_DIR", tmp_path)
+    c = TestClient(app)
+    src = '#include <iostream>\nint main(){std::cout << "{\\"skill\\":\\"double_move\\",\\"actions\\":[{\\"type\\":\\"move\\",\\"to\\":[1,4]}]}";}'
+    payload = make_zip({"bad.cpp": src.encode()})
+    aid = c.post("/api/ai/upload", files={"file": ("ai.zip", payload, "application/zip")}).json()["aid"]
+    g = c.post("/api/games/new", json={"n": 9, "m": 9, "seed": 7}).json()
+    gid, k = g["id"], g["state"]["skill_k"]
+    c.post(f"/api/games/{gid}/skills/select", json={"player": 0, "skills": ["double_move"] * k})
+    c.post(f"/api/games/{gid}/skills/select", json={"player": 1, "skills": ["phase_walk"] * k})
+    r = c.post(f"/api/games/{gid}/ai-external-move", json={"aid": aid, "timeout": 10})
+    assert r.status_code == 400 and "两步" in r.text, r.text
+    subprocess.run(["docker", "rmi", ai_runner.image_tag(aid)], capture_output=True, timeout=60)

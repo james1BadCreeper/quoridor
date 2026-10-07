@@ -142,11 +142,14 @@ class GameState:
 
         与导出棋谱格式不通用：此处只给决策必需项。
         含：尺寸、双方棋子、轮次、墙（位置/余量）、死点/流沙、获胜列、
-        自家手牌明细、对方手牌总数、连续行动/序列锁/奖励步。
+        自家手牌明细、对方手牌总数、流沙奖励轮。
         不含：history（技能打出无后效，复盘才用）、胜负/开局标记（调用时恒定）、
         skill_k/walls_total（由 n、m 推导）、穿墙/免费墙 buff
         （技能与行动原子打出，不会残留到下次决策）、L 券
         （改造现打现放：打出后本次行动必须放 L 墙，否则作废，无需传入）。
+        回合状态只用一个字段：sand_bonus 为真＝因对方踩中流沙，本轮可行动两次
+        （与连续行动不同，此时放墙不受限）；连续行动须一次输出两步，
+        must_move/seq_skill_used/bonus_moves 只在引擎内部流转，不传给 AI。
         """
         me, opp = self.turn, 1 - self.turn
         return {
@@ -162,9 +165,7 @@ class GameState:
             "goal_B": self.goal_B,
             "hand": dict(self.hands[me]),
             "opp_hand_count": sum(self.hands[opp].values()),
-            "must_move": self.must_move,
-            "seq_skill_used": self.seq_skill_used,
-            "bonus_moves": self.bonus_moves,
+            "sand_bonus": self.bonus_moves > 0 and not self.must_move,
         }
 
     @staticmethod

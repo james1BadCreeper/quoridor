@@ -265,6 +265,8 @@ def _step_side(side: str, st: engine.GameState, timeout: float) -> dict:
         except (ValueError, KeyError, TypeError) as e:
             raise AIError(f"打出手牌非法（{d.get('skill')}）：{e}")
         played = {"skill": d["skill"], "to": d.get("to")}
+    if d.get("skill") == "double_move" and len(actions) != 2:
+        raise AIError("连续行动须一次输出两步")
     done = []
     for a in actions:
         if st.winner is not None or st.turn != me:

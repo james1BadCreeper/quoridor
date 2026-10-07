@@ -40,9 +40,7 @@ struct Board {
     int oppHandCount = 0;                 // 对方剩余手牌总数（只给张数，不给明细）
     int wallsLeft = 0, lBonus = 0;
     bool phased = false, freeWall = false;  // 穿墙 / 免费墙 buff
-    bool mustMove = false;                  // 连续行动中：只能走子
-    bool seqSkillUsed = false;              // 本序列已打出过技能
-    int bonusMoves = 0;                     // 本轮剩余步数（连续行动/流沙罚步）
+    bool sandBonus = false;  // 流沙奖励轮：因对方踩中流沙，本轮可行动两次且可放墙
 };
 
 // 单面墙阻断的双向边（与后端 engine.wall_edges 完全一致）
@@ -225,10 +223,8 @@ static Board parseBoard(const json &j) {
     if (ph.size() > (size_t)b.turn && ph[b.turn].is_boolean()) b.phased = (bool)ph[b.turn];
     auto fr = j.value("free_buff", json::array());
     if (fr.size() > (size_t)b.turn && fr[b.turn].is_boolean()) b.freeWall = (bool)fr[b.turn];
-    if (j.contains("must_move") && j["must_move"].is_boolean()) b.mustMove = (bool)j["must_move"];
-    if (j.contains("seq_skill_used") && j["seq_skill_used"].is_boolean())
-        b.seqSkillUsed = (bool)j["seq_skill_used"];
-    b.bonusMoves = getInt(j, "bonus_moves", 0);
+    if (j.contains("sand_bonus") && j["sand_bonus"].is_boolean())
+        b.sandBonus = (bool)j["sand_bonus"];
     return b;
 }
 
@@ -320,9 +316,11 @@ static bool getActionWall(const json &a, WallSpec &w) {
 
 // 校验整轮决策（输出前调用，不过直接判负——与后端落子语义逐条一致）：
 //   形状：对象，actions 为 1~2 个行动对象；
-//   技能：须在手牌、序列新鲜，make_sand 须带合法 to；
+//   技能：须在手牌（每轮都是新序列，无需查序列锁），make_sand 须带合法 to；
+//   连续行动须一次输出两步（否则判负）；
 //   首行动按打出后状态校验；若首行动终结轮次（获胜/围死/踩流沙/换人），
 //   后续 actions 作废不再校验；否则在落子后状态下继续校验第二个行动。
+//   流沙奖励轮（对方踩中流沙）的第二步可以放墙；连续行动的两步都必须是走子。
 // 注意围死墙按引擎语义合法（此处不断路强制）。
 static DecisionCheck checkDecision(const Board &b, const json &d) {
     DecisionCheck r;
@@ -335,8 +333,9 @@ static DecisionCheck checkDecision(const Board &b, const json &d) {
         r.reason = "actions 须为 1~2 个行动对象";
         return r;
     }
-    // 技能预检（只读，不真正扣牌）
+    // 技能预检（只读，不真正扣牌；每轮都是新序列）
     Board s = b;
+    bool isDouble = false;
     auto skillIt = d.find("skill");
     if (skillIt != d.end()) {
         if (!skillIt->is_string()) {
@@ -344,18 +343,17 @@ static DecisionCheck checkDecision(const Board &b, const json &d) {
             return r;
         }
         std::string sk = *skillIt;
-        if (b.seqSkillUsed) {
-            r.reason = "本序列已打出过技能";
-            return r;
-        }
         auto hc = s.hand.find(sk);
         if (hc == s.hand.end() || hc->second <= 0) {
             r.reason = "手牌中无此技能:" + sk;
             return r;
         }
         if (sk == "double_move") {
-            s.bonusMoves += 1;
-            s.mustMove = true;
+            isDouble = true;
+            if (ait->size() != 2) {
+                r.reason = "连续行动须一次输出两步";
+                return r;
+            }
         } else if (sk == "phase_walk") {
             s.phased = true;
         } else if (sk == "free_wall") {
@@ -380,8 +378,8 @@ static DecisionCheck checkDecision(const Board &b, const json &d) {
             return r;
         }
     }
-    // 逐个行动校验（本地仿真）
-    int remaining = s.bonusMoves;
+    // 逐个行动校验（本地仿真）；mustMove 只在连续行动仿真内有效
+    bool mustMove = isDouble;
     for (auto &a : *ait) {
         if (!a.is_object()) {
             r.reason = "行动须为对象";
@@ -402,7 +400,7 @@ static DecisionCheck checkDecision(const Board &b, const json &d) {
             s.me = to;
             if (isGoal(s, s.turn, to) || s.sands.count(to)) break;  // 获胜/踩流沙：轮次终结
         } else if (t == "wall") {
-            if (s.mustMove) {
+            if (mustMove) {
                 r.reason = "连续行动中只能走子";
                 return r;
             }
@@ -448,12 +446,8 @@ static DecisionCheck checkDecision(const Board &b, const json &d) {
             r.reason = "未知行动类型";
             return r;
         }
-        // 本行动未终结轮次：有剩余步数则继续，否则换人、后续作废
-        if (remaining > 0) {
-            remaining--;
-        } else {
-            break;
-        }
+        // 本行动未终结轮次：连续行动/流沙奖励则继续校验第二个，否则换人、后续作废
+        if (!(isDouble || s.sandBonus)) break;
     }
     r.ok = true;
     return r;

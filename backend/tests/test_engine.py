@@ -373,6 +373,23 @@ def test_to_ai_dict_is_slim():
     select_skills(st, 1, ["phase_walk"] * st.skill_k)
     d = st.to_ai_dict()
     assert set(d) == {"n", "m", "pawns", "turn", "walls", "walls_left", "deads", "sands",
-                      "goal_A", "goal_B", "hand", "opp_hand_count", "must_move",
-                      "seq_skill_used", "bonus_moves"}
+                      "goal_A", "goal_B", "hand", "opp_hand_count", "sand_bonus"}
     assert d["hand"] == {"double_move": 2} and d["opp_hand_count"] == 2
+
+
+def test_quicksand_bonus_allows_wall():
+    """对方踩流沙造成的连续行动不受只能走子限制，且快照置 sand_bonus。"""
+    st = _started()
+    target = legal_pawn_moves(st, 0)[0]
+    st.sands.add(tuple(target))  # 确保落点是流沙
+    apply_pawn_move(st, list(target))  # 先手踩流沙，后手连走两次
+    assert st.turn == 1 and st.bonus_moves == 1 and not st.must_move
+    assert st.to_ai_dict()["sand_bonus"] is True
+    left = st.walls_left[1]
+    apply_wall(st, Wall(wr=2, wc=0, orientation="H"))
+    assert st.walls_left[1] == left - 1
+
+
+def test_normal_snapshot_has_no_sand_bonus():
+    st = _started()
+    assert st.to_ai_dict()["sand_bonus"] is False
