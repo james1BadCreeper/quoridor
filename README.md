@@ -41,7 +41,7 @@ npm run dev   # 访问 http://127.0.0.1:5173（/api 已代理到 8000 端口）
 - 后端 `backend/app/engine.py`：随机地图、直墙（长 2，改造技能可放 L 墙）、A/B 获胜列集（相互独立）、死点/流沙（首末行无死点流沙）、流沙罚步、无路径即被围判胜、技能系统（手牌/序列锁/免费墙等 5 种）。
 - 接口：开局 `/api/games/new`（支持人类指定 A/B 列集，返回 `skill_k`）、赛前选技能（`/skills/select`、`/skills/random`）、行动前打出手牌（`/skills/play`）、走子/放墙、合法走子查询、随机示例 AI（偶尔用技能）、棋谱导出/导入。
 - 前端：深色现代 UI；开局向导（随机出题人 → 人类点选/AI 随机出 A/B → 对方选边 → 双方选技能卡）；技能面板（同机手牌互可见）、L 墙放置与流沙选格；本地双人 / 人机混战 / AI 走到底演示、棋谱 json 导出导入、快照回放条。
-- AI：Python 随机基线（`random_ai_move`）+ C++ 贪心示例（BFS 最短路推进、挡路墙、四技能启发式，捆绑 nlohmann/json，docker 内编译）；外部 AI 上传/编译/对战接口（`POST /api/ai/upload`、`POST /api/ai/match`，沙箱 `--network none` + 超时 + 256MB 内存）。
+- AI：Python 随机基线（`random_ai_move`）+ C++ 示例（贪心 `ai_example.cpp`、随机 `ai_random.cpp`，共用 `ai_common.hpp` 解析库并捆绑 nlohmann/json，docker 内编译）；外部 AI 上传/编译/对战接口（`POST /api/ai/upload`、`POST /api/ai/match`，沙箱 `--network none` + 超时 + 256MB 内存）；默认 AI 列表（`GET /api/ai/list`：内置贪心/随机 + 已上传，前端开局可直选、可上传）。
 
 ## AI 编写指南
 
@@ -72,16 +72,18 @@ npm run dev   # 访问 http://127.0.0.1:5173（/api 已代理到 8000 端口）
 
 ### 3. 打包规范（上传 zip）
 
-- 只收 `.cpp/.cc/.c/.h/.hpp`；最多 64 个文件、解压后 ≤8MB；须至少包含一个源文件（多文件一起编译链接）。
+- 只收 `.cpp/.cc/.c/.h/.hpp`；最多 64 个文件、解压后 ≤8MB；须至少包含一个源文件（多文件一起编译链接，**拍平为单目录**，头文件用同目录 `#include`）。
 - 编译出的二进制即 AI 本体：固定从 stdin/stdout 按协议交互，无参数、无网络。
 - 单步默认超时 5 秒（可调，上限 30 秒），内存 256MB；超时/崩溃/无输出判负。
+- 开局向导的 AI 下拉 = 默认列表：随机基线（引擎内置）+ 内置贪心/随机（容器）+ 已上传；AI 席位旁可直接上传 zip，编译通过后自动选中。
 
 ### 4. 本地 docker 编译运行（以示例 AI 为例）
 
 ```bash
 cd backend/app/ai_cpp_example
-./build.sh            # 容器内 g++ 编译，得到镜像 quoridor-ai-example
-./run.sh < kifu.json  # 沙箱运行（--network none），stdout 输出一行决策
+./build.sh            # 容器内 g++ 编译两个示例（quoridor-ai-example / quoridor-ai-random）
+./run.sh < kifu.json  # 沙箱运行贪心示例（--network none），stdout 输出一行决策
+./run.sh random < kifu.json  # 沙箱运行随机示例
 ```
 
 其中 `kifu.json` 可由对局导出：`GET /api/games/{id}/export`；选牌阶段自测：
@@ -118,6 +120,7 @@ curl -X POST http://127.0.0.1:8000/api/ai/match \
 
 ### 7. 基线强度
 
-- Python random 基线见 `backend/app/engine.py::random_ai_move`，可作为最弱对手。
+- Python random 基线见 `backend/app/engine.py::random_ai_move`，可作为最弱对手（前端“随机基线”即它）。
+- C++ 随机示例（`ai_random.cpp`）：正规协议+本地合法性复算的随机策略，已进默认列表（`builtin-random`）。
 - C++ 贪心示例（`ai_example.cpp`）：BFS 最短路推进、给对方挡路的墙、四技能启发式使用；
-  实测 9×9 对 random 基线六战全胜（先/后手各三局，约 20 步终结）。
+  实测 9×9 对 random 基线六战全胜（先/后手各三局，约 20 步终结），已进默认列表（`builtin-greedy`）。

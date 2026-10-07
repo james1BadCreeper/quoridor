@@ -29,6 +29,16 @@ export const apiSkillRandom = (gid, player) =>
   req(`/api/games/${gid}/skills/random`, json({ player }));
 export const apiSkillPlay = (gid, skill, to) =>
   req(`/api/games/${gid}/skills/play`, json({ skill, to: to ?? null }));
+export const apiAiList = () => req('/api/ai/list').then((j) => j.ais || []);
+export const apiAiUpload = async (file) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch(`${API}/api/ai/upload`, { method: 'POST', body: fd });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+};
+export const apiExternalMove = (gid, aid) =>
+  req(`/api/games/${gid}/ai-external-move`, json({ aid }));
 
 // —— 单面墙阻断边（镜像 engine.wall_edges），用于悬停预览的本地合法性判断 ——
 function edgesOf(w) {

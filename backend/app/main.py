@@ -224,7 +224,7 @@ def upload_ai(file: UploadFile = File(...)) -> dict:
 
 @app.get("/api/ai/list")
 def list_ais() -> dict:
-    """已上传的 AI 一览（含是否已编译）。"""
+    """默认 AI（内置贪心/随机，首次使用自动构建）+ 已上传的 AI 一览。"""
     return {"ais": ai_runner.list_ais()}
 
 

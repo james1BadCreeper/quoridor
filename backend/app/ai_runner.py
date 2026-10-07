@@ -19,6 +19,14 @@ from .engine import Wall
 # 上传的 AI 存放目录（仓库 data/ais/<aid>/src + Dockerfile + meta.json）
 AI_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ais"
 BASE_IMAGE = "gcc:14-bookworm"  # 编译/运行基镜像（需预先 docker load 导入）
+EXAMPLE_DIR = Path(__file__).resolve().parent / "ai_cpp_example"  # 作者模板目录
+
+# 内置默认 AI：aid → (主源文件, 展示名)。源码与作者模板同源，首次使用时自动在容器内编译。
+BUILTINS: dict[str, tuple[str, str]] = {
+    "builtin-greedy": ("ai_example.cpp", "贪心示例（内置）"),
+    "builtin-random": ("ai_random.cpp", "随机示例（内置）"),
+}
+BUILTIN_FILES = ("ai_common.hpp", "json.hpp")  # 主文件之外的公共文件
 
 ALLOWED_SUFFIX = {".cpp", ".cc", ".c", ".h", ".hpp"}  # zip 内允许的源码扩展名
 MAX_FILES = 64  # 单个 zip 最多文件数
@@ -115,13 +123,42 @@ def image_built(aid: str) -> bool:
     return p.returncode == 0
 
 
+def ensure_builtin(aid: str) -> None:
+    """物化内置 AI 源码并在缺镜像时编译（与作者上传走同一套容器内编译）。"""
+    if aid not in BUILTINS:
+        return
+    main_src, name = BUILTINS[aid]
+    src = AI_DIR / aid / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    # 内置源码与作者模板同源，每次同步，保证镜像与模板一致
+    (src / Path(main_src).name).write_bytes((EXAMPLE_DIR / main_src).read_bytes())
+    for f in BUILTIN_FILES:
+        (src / f).write_bytes((EXAMPLE_DIR / f).read_bytes())
+    (AI_DIR / aid / "meta.json").write_text(
+        json.dumps({"aid": aid, "name": name, "builtin": True}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    if not image_built(aid):
+        build_ai(aid)
+
+
+def ensure_image(aid: str) -> None:
+    """确保 aid 可运行：内置自动构建；上传的须已编译过，否则报错。"""
+    if aid in BUILTINS:
+        ensure_builtin(aid)
+        return
+    _aid_dir(aid)
+    if not image_built(aid):
+        raise AIError(f"AI 未编译：{aid}（先 POST /api/ai/upload 构建）")
+
+
 def run_ai(aid: str, payload: dict, timeout: float = 5) -> dict:
     """运行 AI 容器一步：stdin 输入 json，取 stdout 最后一行非空解析为决策。
 
     决策格式同 ai_cpp_example：{"type":"move",...} / {"type":"wall",...}，
     或带技能 {"skill":..,"to":..,"action":{...}}；选牌阶段返回 {"skills":[...]}。
     """
-    _aid_dir(aid)
+    ensure_image(aid)
     if timeout <= 0 or timeout > RUN_CONTAINER_TIMEOUT:
         raise AIError(f"超时须在 (0,{RUN_CONTAINER_TIMEOUT}] 秒内")
     try:
@@ -210,8 +247,14 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
     st = engine.new_game(n=n, m=m, seed=seed)
     sides = [white, black]
     for pl, side in enumerate(sides):
-        if side != "random" and not image_built(side):
-            raise AIError(f"AI 未编译：{side}（先 POST /api/ai/upload 构建）")
+        if side != "random":
+            try:
+                ensure_image(side)
+            except AIError as e:
+                st.winner = 1 - pl
+                st.win_reason = f"{'先手' if pl == 0 else '后手'}AI 不可用：{e}"
+                return {"winner": st.winner, "win_reason": st.win_reason, "plies": 0,
+                        "sides": sides, "state": st.to_dict()}
         try:
             engine.select_skills(st, pl, _select_for(side, st, timeout))
         except AIError as e:
@@ -238,12 +281,18 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
 
 
 def list_ais() -> list[dict]:
-    """扫描已上传的 AI（含是否已编译）。"""
-    if not AI_DIR.is_dir():
-        return []
+    """默认 AI（内置，自动构建）+ 已上传的 AI（含是否已编译）。"""
     out = []
+    for aid, (_, name) in BUILTINS.items():
+        try:
+            built = image_built(aid)
+        except (AIError, OSError):
+            built = False
+        out.append({"aid": aid, "name": name, "built": built, "builtin": True})
+    if not AI_DIR.is_dir():
+        return out
     for d in sorted(AI_DIR.iterdir()):
-        if not d.is_dir() or not (d / "src").is_dir():
+        if not d.is_dir() or not (d / "src").is_dir() or d.name in BUILTINS:
             continue
         name = d.name
         try:
@@ -252,7 +301,7 @@ def list_ais() -> list[dict]:
             pass
         try:
             built = image_built(d.name)
-        except AIError:
+        except (AIError, OSError):
             built = False
-        out.append({"aid": d.name, "name": name, "built": built})
+        out.append({"aid": d.name, "name": name, "built": built, "builtin": False})
     return out

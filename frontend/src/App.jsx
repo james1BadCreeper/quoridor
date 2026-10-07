@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import Board from './components/Board.jsx';
 import SetupWizard from './components/SetupWizard.jsx';
 import {
-  apiAiMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall,
+  apiAiMove, apiExternalMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall,
   apiSkillPlay, apiSkillRandom, apiSkillSelect, apiSkills,
   sandLocalLegal, wallLocalLegal,
 } from './api.js';
@@ -40,6 +40,7 @@ export default function App() {
   const [ghost, setGhost] = useState(null);
   const [seatNames, setSeatNames] = useState(['先手', '后手']);
   const [seatTypes, setSeatTypes] = useState(['human', 'human']);
+  const [seatAIs, setSeatAIs] = useState(['random', 'random']); // AI 席位来源：random 或后端 aid
   const [autoAI, setAutoAI] = useState(false);
   const [busy, setBusy] = useState(false);
   const [skillDefs, setSkillDefs] = useState({});
@@ -52,6 +53,7 @@ export default function App() {
   // refs 供 AI 走到底循环读取最新值
   const stateRef = useRef(state); stateRef.current = state;
   const typesRef = useRef(seatTypes); typesRef.current = seatTypes;
+  const aisRef = useRef(seatAIs); aisRef.current = seatAIs;
   const gidRef = useRef(gid); gidRef.current = gid;
   const autoRef = useRef(false);
 
@@ -98,6 +100,7 @@ export default function App() {
       setGid(j.id);
       setSeatNames(names);
       setSeatTypes(types);
+      setSeatAIs(cfg.seatAIs ?? ['random', 'random']);
       setSnaps([cur]);
       setStep(0);
       setState(cur);
@@ -144,7 +147,11 @@ export default function App() {
   }
 
   async function aiOnce(g) {
-    const j = await apiAiMove(g ?? gidRef.current);
+    const st = stateRef.current;
+    const aid = st ? aisRef.current[st.turn] : 'random';
+    const j = (aid && aid !== 'random')
+      ? await apiExternalMove(g ?? gidRef.current, aid)
+      : await apiAiMove(g ?? gidRef.current);
     appendSnap(j.state);
     return j.state;
   }
@@ -173,7 +180,7 @@ export default function App() {
 
   function exportKifu() {
     if (!state) return;
-    const blob = new Blob([JSON.stringify({ state, snaps, meta: { seatNames, seatTypes } }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ state, snaps, meta: { seatNames, seatTypes, seatAIs } }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `kifu_${gid ?? 'local'}.json`;
@@ -189,7 +196,7 @@ export default function App() {
         setSnaps(j.snaps);
         setStep(0);
         setState(j.snaps[j.snaps.length - 1]);
-        if (j.meta) { setSeatNames(j.meta.seatNames); setSeatTypes(j.meta.seatTypes); }
+        if (j.meta) { setSeatNames(j.meta.seatNames); setSeatTypes(j.meta.seatTypes); setSeatAIs(j.meta.seatAIs ?? ['random', 'random']); }
         setGid(null);
         setWizardOpen(false);
       } else {

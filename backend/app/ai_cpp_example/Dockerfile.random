@@ -1,0 +1,6 @@
+# 随机示例 AI 的编译镜像（与 Dockerfile 同模式，换主文件即可）。
+FROM gcc:14-bookworm
+WORKDIR /ai
+COPY ai_random.cpp ai_common.hpp json.hpp ./
+RUN g++ -std=c++17 -O2 -o /ai/ai ai_random.cpp
+ENTRYPOINT ["/ai/ai"]

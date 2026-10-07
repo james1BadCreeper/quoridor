@@ -1,6 +1,6 @@
 // 开局向导：完整规则流程 —— 随机出题人 → 选 A/B 列集 → 另一方选边 → 选技能卡。
 import { useEffect, useState } from 'react';
-import { apiSkills, skillK } from '../api.js';
+import { apiAiList, apiAiUpload, apiSkills, skillK } from '../api.js';
 
 const FALLBACK_SKILLS = {  l_remodel: { name: '改造', desc: '获得 1 次 L 形墙放置权' },
   double_move: { name: '连续行动', desc: '本回合连续移动两次' },
@@ -75,6 +75,9 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   const [seed, setSeed] = useState('');
   const [names, setNames] = useState(['红方', '蓝方']);
   const [ptypes, setPtypes] = useState(['human', 'human']);
+  const [aiIds, setAiIds] = useState(['random', 'random']); // AI 席位来源：random=引擎随机基线，或 aid
+  const [aiOptions, setAiOptions] = useState([]); // 后端默认 + 已上传 AI 列表
+  const [uploading, setUploading] = useState(false);
   // 定稿后的开局参数
   const [fm, setFm] = useState(9);
   const [fn, setFn] = useState(9);
@@ -88,7 +91,19 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
 
   useEffect(() => {
     apiSkills().then(setSkillDefs).catch(() => {});
+    apiAiList().then(setAiOptions).catch(() => {});
   }, []);
+
+  async function uploadAi(i, file) {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const j = await apiAiUpload(file);
+      const list = await apiAiList();
+      setAiOptions(list);
+      setAiIds(aiIds.map((v, k) => (k === i ? j.aid : v)));
+    } catch (e) { alert(`上传失败：${e.message}`); } finally { setUploading(false); }
+  }
 
   const picker = 1 - chooser;
   const k = Math.floor(fm / 2);
@@ -160,7 +175,15 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
       // 人类席位用所选牌，AI 席位传 null（由后端随机）
       skillPicks: [ptypes[0] === 'human' ? skillPicks[0] : null,
                    ptypes[1] === 'human' ? skillPicks[1] : null],
+      // 每席 AI 来源：random=引擎随机基线，否则为后端 aid（含内置与上传）
+      seatAIs: [cfg_ai(0), cfg_ai(1)],
     });
+
+    function cfg_ai(seat) {
+      const p = seatOf[seat];
+      if (ptypes[p] !== 'ai') return null;
+      return aiIds[p];
+    }
   }
 
   function adjustPick(i, id, delta) {
@@ -198,8 +221,26 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
                 <select value={ptypes[i]}
                   onChange={(e) => setPtypes(ptypes.map((v, j) => (j === i ? e.target.value : v)))}>
                   <option value="human">人类</option>
-                  <option value="ai">AI（随机示例）</option>
+                  <option value="ai">AI</option>
                 </select>
+                {ptypes[i] === 'ai' && (
+                  <>
+                    <select value={aiIds[i]}
+                      onChange={(e) => setAiIds(aiIds.map((v, j) => (j === i ? e.target.value : v)))}>
+                      <option value="random">随机基线（引擎内置）</option>
+                      {aiOptions.map((a) => (
+                        <option key={a.aid} value={a.aid}>
+                          {a.name}{a.builtin ? '' : '（已上传）'}{a.built ? '' : '（未编译）'}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="btn ghost filebtn" title="上传 C++ 源码 zip，后端在 docker 内编译">
+                      {uploading ? '编译中…' : '上传 AI'}
+                      <input type="file" accept=".zip" hidden disabled={uploading}
+                        onChange={(e) => { uploadAi(i, e.target.files[0]); e.target.value = ''; }} />
+                    </label>
+                  </>
+                )}
               </div>
             ))}
           </div>

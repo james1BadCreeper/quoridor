@@ -61,9 +61,10 @@ def test_zip_ok_flattens(tmp_path, monkeypatch):
 def test_upload_build_move_and_match(tmp_path, monkeypatch):
     monkeypatch.setattr(ai_runner, "AI_DIR", tmp_path)
     c = TestClient(app)
-    # 上传示例 AI（cpp + json.hpp）并在容器内编译
+    # 上传示例 AI（cpp + 公共头 + json.hpp）并在容器内编译
     payload = make_zip({
         "ai_example.cpp": (EXAMPLE_DIR / "ai_example.cpp").read_bytes(),
+        "ai_common.hpp": (EXAMPLE_DIR / "ai_common.hpp").read_bytes(),
         "json.hpp": (EXAMPLE_DIR / "json.hpp").read_bytes(),
     })
     r = c.post("/api/ai/upload", files={"file": ("ai.zip", payload, "application/zip")})
@@ -97,3 +98,22 @@ def test_upload_build_move_and_match(tmp_path, monkeypatch):
     # 一览能看到
     assert aid in [a["aid"] for a in c.get("/api/ai/list").json()["ais"]]
     subprocess.run(["docker", "rmi", ai_runner.image_tag(aid)], capture_output=True, timeout=60)
+
+
+@needs_docker
+def test_builtin_defaults():
+    c = TestClient(app)
+    aids = {a["aid"]: a for a in c.get("/api/ai/list").json()["ais"]}
+    assert aids["builtin-greedy"]["builtin"] and aids["builtin-random"]["builtin"]
+    # 内置随机走一步（容器路径）
+    g = c.post("/api/games/new", json={"n": 9, "m": 9, "seed": 11}).json()
+    gid, k = g["id"], g["state"]["skill_k"]
+    c.post(f"/api/games/{gid}/skills/select", json={"player": 0, "skills": ["phase_walk"] * k})
+    c.post(f"/api/games/{gid}/skills/select", json={"player": 1, "skills": ["phase_walk"] * k})
+    r = c.post(f"/api/games/{gid}/ai-external-move", json={"aid": "builtin-random", "timeout": 10})
+    assert r.status_code == 200, r.text
+    # 内置贪心对 random 短对战
+    r = c.post("/api/ai/match", json={"white": "builtin-greedy", "black": "random", "n": 9, "m": 9,
+                                      "seed": 9, "max_plies": 200, "timeout": 10})
+    assert r.status_code == 200, r.text
+    assert r.json()["winner"] in (0, 1, -1)

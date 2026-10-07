@@ -5,10 +5,12 @@
 ## 0. 本目录文件
 
 - `ai_example.cpp`：贪心示例 AI（BFS 最短路推进、挡路墙、四技能启发式），可直接照抄结构。
+- `ai_random.cpp`：随机示例 AI（同样走正规协议+本地合法性复算），演示“弱策略也必须保证输出合法”。
+- `ai_common.hpp`：公共库（棋盘解析、阻挡边、走子含跳子、BFS、放墙/流沙合法性复算），两个示例共用。
 - `json.hpp`：捆绑的 nlohmann/json 单头文件（v3.11.3），打包时**须一起打进 zip**（或换你自己的解析方式）。
-- `Dockerfile`：容器内编译模板（COPY 源码 → g++ 编译 → ENTRYPOINT 为二进制），自己的 AI 照此模式写。
-- `build.sh`：`docker build -t quoridor-ai-example .` + 选牌自检。
-- `run.sh`：沙箱运行（`--network none`，256MB 内存），stdin 读 json，stdout 输出一行决策。
+- `Dockerfile` / `Dockerfile.random`：容器内编译模板（COPY 源码 → g++ 编译 → ENTRYPOINT 为二进制）。
+- `build.sh`：一次构建两个示例镜像（`quoridor-ai-example` / `quoridor-ai-random`）+ 选牌自检。
+- `run.sh [example|random]`：沙箱运行（`--network none`，256MB 内存），stdin 读 json，stdout 输出一行决策。
 
 ## 1. 棋谱 JSON 格式
 
@@ -53,8 +55,9 @@
 ## 3. 编译与本地测试（docker 内编译）
 
 ```bash
-./build.sh              # 容器内 g++ -std=c++17 -O2 编译，得到 quoridor-ai-example
-./run.sh < kifu.json    # 沙箱运行，stdout 输出一行决策 json
+./build.sh              # 容器内 g++ -std=c++17 -O2 编译两个示例，得到 quoridor-ai-example/random
+./run.sh < kifu.json    # 沙箱运行贪心示例，stdout 输出一行决策 json
+./run.sh random < kifu.json  # 沙箱运行随机示例
 echo '{"phase":"select","skill_k":2}' | ./run.sh   # 选牌阶段自测
 ```
 
