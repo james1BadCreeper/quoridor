@@ -34,6 +34,7 @@ class SkillAISelectRequest(BaseModel):
     player: int
     aid: str  # 跑该 AI 的选牌阶段容器
     timeout: float = 5
+    memory_mb: int = 256  # 容器内存（MiB）
 
 
 class SkillPlayRequest(BaseModel):
@@ -44,6 +45,7 @@ class SkillPlayRequest(BaseModel):
 class ExternalMoveRequest(BaseModel):
     aid: str  # 已上传并编译的 AI id
     timeout: float = Field(default=5, description="AI 单步运行超时（秒）")
+    memory_mb: int = Field(default=256, description="容器内存（MiB）")
 
 
 class MatchRequest(BaseModel):
@@ -54,6 +56,7 @@ class MatchRequest(BaseModel):
     seed: int | None = None
     max_plies: int = Field(default=800, description="步数上限，超限判平局")
     timeout: float = Field(default=5, description="AI 单步运行超时（秒）")
+    memory_mb: int = Field(default=256, description="容器内存（MiB）")
     chooser: str = Field(default="random", description="出题方：white/black/random（抛硬币），另一方选边")
 
 
@@ -64,6 +67,7 @@ class AIGoalsRequest(BaseModel):
     deads: list[list[int]] = Field(default_factory=list, description="死点（预览地形）")
     sands: list[list[int]] = Field(default_factory=list, description="流沙（预览地形）")
     timeout: float = 5
+    memory_mb: int = 256  # 容器内存（MiB）
 
 
 class MapPreviewRequest(BaseModel):
@@ -81,3 +85,4 @@ class AISideRequest(BaseModel):
     goal_A: list[int] = Field(default_factory=list)
     goal_B: list[int] = Field(default_factory=list)
     timeout: float = 5
+    memory_mb: int = 256  # 容器内存（MiB）

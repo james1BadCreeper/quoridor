@@ -33,6 +33,9 @@ MAX_FILES = 64  # 单个 zip 最多文件数
 MAX_TOTAL = 8 * 1024 * 1024  # 解压后总大小上限 8MB
 BUILD_TIMEOUT = 240  # docker build 超时（秒）
 RUN_CONTAINER_TIMEOUT = 30  # 单步容器运行超时上限（秒）
+DEFAULT_MEMORY_MB = 256  # 容器内存默认（MiB）
+MIN_MEMORY_MB = 64  # 容器内存下限（MiB）
+MAX_MEMORY_MB = 2048  # 容器内存上限（MiB）
 
 
 class AIError(ValueError):
@@ -170,19 +173,23 @@ def ensure_image(aid: str) -> None:
         raise AIError(f"AI 未编译：{aid}（先 POST /api/ai/upload 构建）")
 
 
-def run_ai(aid: str, payload: dict, timeout: float = 5) -> dict:
+def run_ai(aid: str, payload: dict, timeout: float = 5,
+           memory_mb: int = DEFAULT_MEMORY_MB) -> dict:
     """运行 AI 容器一步：stdin 输入 json，取 stdout 最后一行非空解析为决策。
 
     决策格式同 ai_cpp_example：{"type":"move",...} / {"type":"wall",...}，
     或带技能 {"skill":..,"to":..,"action":{...}}；选牌阶段返回 {"skills":[...]}。
+    参数先校验（坏参数直接报错，不浪费一次镜像构建）。
     """
-    ensure_image(aid)
     if timeout <= 0 or timeout > RUN_CONTAINER_TIMEOUT:
         raise AIError(f"超时须在 (0,{RUN_CONTAINER_TIMEOUT}] 秒内")
+    if not MIN_MEMORY_MB <= memory_mb <= MAX_MEMORY_MB:
+        raise AIError(f"内存须在 [{MIN_MEMORY_MB},{MAX_MEMORY_MB}] MiB 内")
+    ensure_image(aid)
     try:
         p = subprocess.run(
             ["docker", "run", "--rm", "-i", "--network", "none",
-             "--memory=256m", "--pids-limit=64", "--cpus=0.5", image_tag(aid)],
+             f"--memory={memory_mb}m", "--pids-limit=64", "--cpus=0.5", image_tag(aid)],
             input=json.dumps(payload), capture_output=True, text=True, timeout=timeout + 5,
         )
     except FileNotFoundError:
@@ -200,13 +207,14 @@ def run_ai(aid: str, payload: dict, timeout: float = 5) -> dict:
         raise AIError(f"AI 输出不是合法 json：{lines[-1][:200]}")
 
 
-def ai_goals(aid: str, n: int, m: int, deads: set, sands: set, timeout: float = 5) -> tuple[list[int], list[int]]:
+def ai_goals(aid: str, n: int, m: int, deads: set, sands: set, timeout: float = 5,
+             memory_mb: int = DEFAULT_MEMORY_MB) -> tuple[list[int], list[int]]:
     """AI 出题：跑出题阶段容器，返回校验过的 A/B 列集（非法出题抛 AIError）。
     出题能看到预览地形（与建局地形一致，见 /api/map/preview）。"""
     if not 9 <= m <= 15:
         raise AIError(f"m 须在 [9,15] 内：{m}")
     out = run_ai(aid, {"phase": "goals", "n": n, "m": m,
-                       "deads": sorted(deads), "sands": sorted(sands)}, timeout)
+                       "deads": sorted(deads), "sands": sorted(sands)}, timeout, memory_mb)
     try:
         return engine.validate_goal_sets(m, out["goal_A"], out["goal_B"])
     except (ValueError, KeyError, TypeError) as e:
@@ -214,11 +222,12 @@ def ai_goals(aid: str, n: int, m: int, deads: set, sands: set, timeout: float = 
 
 
 def ai_side(aid: str, n: int, m: int, deads: set, sands: set,
-            goal_A: list[int], goal_B: list[int], timeout: float = 5) -> str:
+            goal_A: list[int], goal_B: list[int], timeout: float = 5,
+            memory_mb: int = DEFAULT_MEMORY_MB) -> str:
     """AI 选边：跑选边阶段容器，返回 first（先手+A）或 second（后手+B）。"""
     out = run_ai(aid, {"phase": "side", "n": n, "m": m,
                        "deads": sorted(deads), "sands": sorted(sands),
-                       "goal_A": goal_A, "goal_B": goal_B}, timeout)
+                       "goal_A": goal_A, "goal_B": goal_B}, timeout, memory_mb)
     side = out.get("side") if isinstance(out, dict) else None
     if side not in ("first", "second"):
         raise AIError(f"选边非法（须 first/second）：{str(out)[:200]}")
@@ -229,20 +238,22 @@ def ai_side(aid: str, n: int, m: int, deads: set, sands: set,
 RANDOM_SIDE = "builtin-random"
 
 
-def select_for(side: str, st: engine.GameState, timeout: float) -> list[str]:
+def select_for(side: str, st: engine.GameState, timeout: float,
+               memory_mb: int = DEFAULT_MEMORY_MB) -> list[str]:
     """某席位的赛前选牌：跑选牌阶段容器（random 即容器随机）。"""
     if side == "random":
         side = RANDOM_SIDE
     out = run_ai(side, {"phase": "select", "skill_k": st.skill_k, "n": st.n, "m": st.m,
                         "deads": sorted(st.deads), "sands": sorted(st.sands),
-                        "goal_A": st.goal_A, "goal_B": st.goal_B}, timeout)
+                        "goal_A": st.goal_A, "goal_B": st.goal_B}, timeout, memory_mb)
     skills = out.get("skills")
     if not isinstance(skills, list) or len(skills) != st.skill_k:
         raise AIError(f"选牌输出非法（须恰好 {st.skill_k} 张）：{str(out)[:200]}")
     return skills
 
 
-def _step_side(side: str, st: engine.GameState, timeout: float) -> dict:
+def _step_side(side: str, st: engine.GameState, timeout: float,
+               memory_mb: int = DEFAULT_MEMORY_MB) -> dict:
     """某席位行动一轮并落到引擎；返回 {"skill":..,"actions":[已执行..],"applied":n}。
 
     新协议一次输出覆盖整轮：{"skill":..,"to":..,"actions":[{..},...]}。
@@ -253,7 +264,7 @@ def _step_side(side: str, st: engine.GameState, timeout: float) -> dict:
     if side == "random":
         side = RANDOM_SIDE
     me = st.turn
-    d = run_ai(side, st.to_ai_dict(), timeout)
+    d = run_ai(side, st.to_ai_dict(), timeout, memory_mb)
     if not isinstance(d, dict):
         raise AIError(f"决策须为 json 对象：{str(d)[:200]}")
     actions = d.get("actions")
@@ -287,14 +298,15 @@ def _step_side(side: str, st: engine.GameState, timeout: float) -> dict:
     return {"player": me, "skill": played, "actions": done, "applied": len(done)}
 
 
-def apply_external_decision(aid: str, st: engine.GameState, timeout: float) -> dict:
+def apply_external_decision(aid: str, st: engine.GameState, timeout: float,
+                            memory_mb: int = DEFAULT_MEMORY_MB) -> dict:
     """单步接口用：aid 跑整轮决策并落到引擎（random 即容器随机）。"""
-    return _step_side(aid, st, timeout)
+    return _step_side(aid, st, timeout, memory_mb)
 
 
 def play_match(white: str, black: str, n: int | None = None, m: int | None = None,
                seed: int | None = None, max_plies: int = 800, timeout: float = 5,
-               chooser: str = "random") -> dict:
+               memory_mb: int = DEFAULT_MEMORY_MB, chooser: str = "random") -> dict:
     """AI 对战：side 为 "random" 或已编译的 aid；犯规/超时者判负，超步数判平局。
 
     出题流程（与前端向导一致）：chooser（white/black/random 之一表出题方，
@@ -324,12 +336,12 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
             goal_A, goal_B = engine.pick_goal_sets(m, rng)
         else:
             ensure_image(chooser_id)
-            goal_A, goal_B = ai_goals(chooser_id, n, m, terrain_d, terrain_s, timeout)
+            goal_A, goal_B = ai_goals(chooser_id, n, m, terrain_d, terrain_s, timeout, memory_mb)
         if picker_id == "random":
             picker_side = rng.choice(["first", "second"])
         else:
             ensure_image(picker_id)
-            picker_side = ai_side(picker_id, n, m, terrain_d, terrain_s, goal_A, goal_B, timeout)
+            picker_side = ai_side(picker_id, n, m, terrain_d, terrain_s, goal_A, goal_B, timeout, memory_mb)
     except AIError as e:
         raise AIError(f"出题/选边失败：{e}")
     st = engine.new_game(n=n, m=m, seed=seed, goal_A=goal_A, goal_B=goal_B)
@@ -345,7 +357,7 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
                 return {"winner": st.winner, "win_reason": st.win_reason, "plies": 0,
                         "sides": sides, "state": st.to_dict()}
         try:
-            engine.select_skills(st, pl, select_for(side, st, timeout))
+            engine.select_skills(st, pl, select_for(side, st, timeout, memory_mb))
         except AIError as e:
             st.winner = 1 - pl
             st.win_reason = f"{'先手' if pl == 0 else '后手'}AI 选牌犯规：{e}"
@@ -355,7 +367,7 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
     while st.winner is None and plies < max_plies:
         side = sides[st.turn]
         try:
-            plies += _step_side(side, st, timeout)["applied"]
+            plies += _step_side(side, st, timeout, memory_mb)["applied"]
         except AIError as e:
             st.winner = 1 - st.turn
             st.win_reason = f"{'先手' if st.turn == 0 else '后手'}AI 犯规：{e}"

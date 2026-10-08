@@ -104,6 +104,13 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   const [aiBusy, setAiBusy] = useState(false); // 等待地形预览 / AI 出题/选边
   const [aiPickedSide, setAiPickedSide] = useState(false); // 容器 AI 是否已选过边
   const [terrain, setTerrain] = useState(null); // 锁定的本局地形 {n, m, deads, sands}
+  const [aiTimeout, setAiTimeout] = useState('5'); // AI 单步时限（秒），1~30
+  const [aiMemory, setAiMemory] = useState('256'); // AI 容器内存（MiB），64~2048
+  // 全局一套 AI 资源限制：钳位后用于出题/选边/选牌/行棋全部 AI 调用
+  const lim = () => ({
+    timeout: Math.min(30, Math.max(1, Number(aiTimeout) || 5)),
+    memoryMb: Math.min(2048, Math.max(64, Number(aiMemory) || 256)),
+  });
   // 定稿后的开局参数
   const [fm, setFm] = useState(9);
   const [fn, setFn] = useState(9);
@@ -166,7 +173,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
         if (ptypes[ch] === 'human') { setGoalA([]); setGoalB([]); }
         else {
           try {
-            const g = await apiAiGoals(aiIds[ch], terr);
+            const g = await apiAiGoals(aiIds[ch], terr, lim());
             setGoalA(g.goal_A); setGoalB(g.goal_B);
           } catch (e) { alert(`AI 出题失败，已改用随机：${e.message}`); const g = randomGoals(mm); setGoalA(g.a); setGoalB(g.b); }
         }
@@ -184,7 +191,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
     const p = picker;
     if (ptypes[p] !== 'ai' || aiPickedSide || aiBusy) return;
     setAiBusy(true);
-    apiAiSide(aiIds[p], { n: terrain.n, m: terrain.m, deads: terrain.deads, sands: terrain.sands, goal_A: goalA, goal_B: goalB })
+    apiAiSide(aiIds[p], { n: terrain.n, m: terrain.m, deads: terrain.deads, sands: terrain.sands, goal_A: goalA, goal_B: goalB }, lim())
       .then((s) => { setSide(s); setAiPickedSide(true); })
       .catch((e) => { alert(`AI 选边失败，已改用随机：${e.message}`); setSide(Math.random() < 0.5 ? 'first' : 'second'); setAiPickedSide(true); })
       .finally(() => setAiBusy(false));
@@ -232,6 +239,8 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
                    ptypes[1] === 'human' ? skillPicks[1] : null],
       // 每席 AI 来源（后端 aid，含内置与上传）
       seatAIs: [cfg_ai(0), cfg_ai(1)],
+      // 全局 AI 资源限制（出题/选边已用，选牌/行棋由 App 沿用）
+      aiTimeout: lim().timeout, aiMemoryMb: lim().memoryMb,
     });
 
     function cfg_ai(seat) {
@@ -267,6 +276,8 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
             <label>行 n<input value={n} onChange={(e) => setN(e.target.value)} placeholder="空 = 9~15 随机" /></label>
             <label>列 m<input value={m} onChange={(e) => setM(e.target.value)} placeholder="空 = 9~15 随机" /></label>
             <label>随机种子<input value={seed} onChange={(e) => setSeed(e.target.value)} placeholder="空 = 随机并锁定" /></label>
+            <label>AI 单步时限（秒）<input value={aiTimeout} onChange={(e) => setAiTimeout(e.target.value)} placeholder="1~30，默认 5" /></label>
+            <label>AI 容器内存（MiB）<input value={aiMemory} onChange={(e) => setAiMemory(e.target.value)} placeholder="64~2048，默认 256" /></label>
           </div>
           <div className="grid2">
             {[0, 1].map((i) => (

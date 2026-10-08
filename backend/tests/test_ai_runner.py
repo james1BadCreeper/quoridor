@@ -205,3 +205,14 @@ def test_map_preview_rejects_bad_size():
     c = TestClient(app)
     r = c.post("/api/map/preview", json={"n": 5, "m": 9, "seed": 1})
     assert r.status_code == 400
+
+
+def test_ai_limits_rejected_before_build():
+    """坏的时限/内存直接 400（参数先校验，无需 docker、不触发构建）。"""
+    c = TestClient(app)
+    r = c.post("/api/ai/goals", json={"aid": "builtin-random", "n": 9, "m": 9, "memory_mb": 32})
+    assert r.status_code == 400 and "内存" in r.text
+    r = c.post("/api/ai/goals", json={"aid": "builtin-random", "n": 9, "m": 9, "timeout": 99})
+    assert r.status_code == 400 and "超时" in r.text
+    r = c.post("/api/ai/side", json={"aid": "builtin-random", "memory_mb": 4096})
+    assert r.status_code == 400 and "内存" in r.text

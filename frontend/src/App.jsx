@@ -43,6 +43,7 @@ export default function App() {
   // 身份色号：红方 0（红系）、蓝方 1（蓝系），替代原来的席位色号
   const idc = (seat) => (seat === redSeat ? 0 : 1);
   const [seatAIs, setSeatAIs] = useState(['builtin-random', 'builtin-random']); // AI 席位来源（后端 aid）
+  const [aiLim, setAiLim] = useState({ timeout: 5, memoryMb: 256 }); // 全局 AI 资源限制（向导配置）
   const [autoAI, setAutoAI] = useState(false);
   const [busy, setBusy] = useState(false);
   const [skillDefs, setSkillDefs] = useState({});
@@ -58,6 +59,7 @@ export default function App() {
   const typesRef = useRef(seatTypes); typesRef.current = seatTypes;
   const aisRef = useRef(seatAIs); aisRef.current = seatAIs;
   const gidRef = useRef(gid); gidRef.current = gid;
+  const limRef = useRef(aiLim); limRef.current = aiLim;
 
   const shown = snaps.length ? snaps[Math.min(step, snaps.length - 1)] : null;
   const isReplay = snaps.length > 0 && step < snaps.length - 1;
@@ -98,13 +100,14 @@ export default function App() {
       const names = [cfg.participants[cfg.seatOf[0]].name, cfg.participants[cfg.seatOf[1]].name];
       const types = [cfg.participants[cfg.seatOf[0]].type, cfg.participants[cfg.seatOf[1]].type];
       // 双方选技能卡：人类用向导所选，AI 跑各自的选牌阶段容器
+      const glim = { timeout: cfg.aiTimeout ?? 5, memoryMb: cfg.aiMemoryMb ?? 256 };
       let cur = j.state;
       for (let seat = 0; seat < 2; seat++) {
         const p = cfg.seatOf[seat];
         if (cfg.skillPicks[p]) {
           cur = (await apiSkillSelect(j.id, seat, cfg.skillPicks[p])).state;
         } else {
-          cur = (await apiSkillAiSelect(j.id, seat, cfg.seatAIs[seat])).state;
+          cur = (await apiSkillAiSelect(j.id, seat, cfg.seatAIs[seat], glim)).state;
         }
       }
       setGid(j.id);
@@ -112,6 +115,7 @@ export default function App() {
       setSeatTypes(types);
       setRedSeat(cfg.seatOf.indexOf(cfg.participants.findIndex((p) => p.name === '红')));
       setSeatAIs(cfg.seatAIs ?? ['builtin-random', 'builtin-random']);
+      setAiLim(glim);
       setSnaps([cur]);
       setStep(0);
       setState(cur);
@@ -161,7 +165,7 @@ export default function App() {
     const st = stateRef.current;
     // AI 席位跑各自容器；人类回合点“AI 行棋”则由随机示例代走
     const aid = (st && aisRef.current[st.turn]) || 'builtin-random';
-    const j = await apiExternalMove(g ?? gidRef.current, aid);
+    const j = await apiExternalMove(g ?? gidRef.current, aid, limRef.current);
     appendSnap(j.state);
     return j.state;
   }

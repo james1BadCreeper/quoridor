@@ -41,7 +41,7 @@ npm run dev   # 访问 http://127.0.0.1:5173（/api 已代理到 8000 端口）
 - 后端 `backend/app/engine.py`：随机地图、直墙（长 2，改造现打现放 L 墙）、A/B 获胜列集（相互独立）、死点/流沙（首末行无死点流沙）、流沙罚步、无路径即被围判胜、技能系统（手牌/序列锁/免费墙等 5 种）。
 - 接口：开局 `/api/games/new`（支持人类指定 A/B 列集，返回 `skill_k`）、赛前选技能（`/skills/select`、AI 席位 `/skills/ai-select`）、行动前打出手牌（`/skills/play`）、走子/放墙、合法走子查询、AI 出题/选边（`/api/ai/goals`、`/api/ai/side`）、棋谱导出/导入。
 - 前端：深色现代 UI；开局向导（随机出题人 → 出题 → 选边 → 双方选技能卡，AI 出题/选边走容器）；技能面板（对战中 AI 手牌对人类隐藏）、L 墙放置与流沙选格；本地双人 / 人机混战 / AI 走到底演示、棋谱导出导入（增量回放格式，旧全快照可导入）、快照回放条。
-- AI：C++ 示例（贪心 `ai_example.cpp`、随机 `ai_random.cpp`，共用 `ai_common.hpp` 解析库并捆绑 nlohmann/json，docker 内编译）；外部 AI 上传/编译/对战接口（`POST /api/ai/upload`、`POST /api/ai/match`，沙箱 `--network none` + 超时 + 256MB 内存）；默认 AI 列表（`GET /api/ai/list`：内置贪心/随机 + 已上传，前端开局可直选、可上传；`random` 为保留别名，指向容器随机）。
+- AI：C++ 示例（贪心 `ai_example.cpp`、随机 `ai_random.cpp`，共用 `ai_common.hpp` 解析库并捆绑 nlohmann/json，docker 内编译）；外部 AI 上传/编译/对战接口（`POST /api/ai/upload`、`POST /api/ai/match`，沙箱 `--network none` + 超时（默认 5s）+ 内存（默认 256MiB），各 AI 接口均可带 `timeout`/`memory_mb` 覆盖）；默认 AI 列表（`GET /api/ai/list`：内置贪心/随机 + 已上传，前端开局可直选、可上传；`random` 为保留别名，指向容器随机）。
 
 ## AI 编写指南
 
@@ -78,7 +78,7 @@ L 墙须配改造同一次打出，否则作废；流沙陷阱须带落点 `"to"
 
 - 只收 `.cpp/.cc/.c/.h/.hpp`；最多 64 个文件、解压后 ≤8MB；须至少包含一个源文件（多文件一起编译链接，拍平为单目录，头文件用同目录 `#include`；`ai_common.hpp`/`json.hpp` 无需打包，后端自动提供）。
 - 编译出的二进制即 AI 本体：固定从 stdin/stdout 按协议交互，无参数、无网络。
-- 单步默认超时 5 秒（可调，上限 30 秒），内存 256MB；超时/崩溃/无输出判负。
+- 单步默认超时 5 秒（向导可配 1~30 秒）、内存默认 256MiB（向导可配 64~2048MiB）；超时/崩溃/无输出判负。
 - 开局向导的 AI 下拉 = 默认列表：内置贪心/随机（容器）+ 已上传；AI 席位旁可直接上传 zip，编译通过后自动选中。
 
 ### 4. 上传与对战（后端接口）

@@ -151,7 +151,7 @@ def post_skill_ai_select(gid: str, req: SkillAISelectRequest) -> dict:
     if st is None:
         raise HTTPException(404, "对局不存在")
     try:
-        picks = ai_runner.select_for(req.aid, st, req.timeout)
+        picks = ai_runner.select_for(req.aid, st, req.timeout, req.memory_mb)
         select_skills(st, req.player, picks)
     except (AIError, ValueError) as e:
         raise HTTPException(400, str(e))
@@ -202,7 +202,7 @@ def post_external_move(gid: str, req: ExternalMoveRequest) -> dict:
     if not st.started:
         raise HTTPException(400, "双方选完技能卡后方可行动")
     try:
-        summary = ai_runner.apply_external_decision(req.aid, st, req.timeout)
+        summary = ai_runner.apply_external_decision(req.aid, st, req.timeout, req.memory_mb)
     except AIError as e:
         raise HTTPException(400, str(e))
     return {"id": gid, **summary, "state": st.to_dict()}
@@ -213,7 +213,8 @@ def run_match(req: MatchRequest) -> dict:
     """AI 对战：出题方（chooser）定 A/B 列集，另一方选边；犯规/超时者判负，超步数判平局。"""
     try:
         return ai_runner.play_match(req.white, req.black, req.n, req.m,
-                                    req.seed, req.max_plies, req.timeout, req.chooser)
+                                    req.seed, req.max_plies, req.timeout,
+                                    req.memory_mb, req.chooser)
     except AIError as e:
         raise HTTPException(400, str(e))
 
@@ -236,7 +237,8 @@ def post_ai_goals(req: AIGoalsRequest) -> dict:
     try:
         a, b = ai_runner.ai_goals(req.aid, req.n, req.m,
                                   {tuple(x) for x in req.deads},
-                                  {tuple(x) for x in req.sands}, req.timeout)
+                                  {tuple(x) for x in req.sands}, req.timeout,
+                                  req.memory_mb)
     except AIError as e:
         raise HTTPException(400, str(e))
     return {"aid": req.aid, "goal_A": a, "goal_B": b}
@@ -248,7 +250,7 @@ def post_ai_side(req: AISideRequest) -> dict:
     try:
         side = ai_runner.ai_side(req.aid, req.n, req.m, {tuple(x) for x in req.deads},
                                  {tuple(x) for x in req.sands},
-                                 req.goal_A, req.goal_B, req.timeout)
+                                 req.goal_A, req.goal_B, req.timeout, req.memory_mb)
     except AIError as e:
         raise HTTPException(400, str(e))
     return {"aid": req.aid, "side": side}

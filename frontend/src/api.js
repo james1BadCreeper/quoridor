@@ -24,8 +24,8 @@ export const apiImport = (state) => req('/api/games/import', json(state));
 export const apiSkills = () => req('/api/skills').then((j) => j.skills);
 export const apiSkillSelect = (gid, player, skills) =>
   req(`/api/games/${gid}/skills/select`, json({ player, skills }));
-export const apiSkillAiSelect = (gid, player, aid) =>
-  req(`/api/games/${gid}/skills/ai-select`, json({ player, aid }));
+export const apiSkillAiSelect = (gid, player, aid, lim) =>
+  req(`/api/games/${gid}/skills/ai-select`, json({ player, aid, timeout: lim.timeout, memory_mb: lim.memoryMb }));
 export const apiSkillPlay = (gid, skill, to) =>
   req(`/api/games/${gid}/skills/play`, json({ skill, to: to ?? null }));
 export const apiAiList = () => req('/api/ai/list').then((j) => j.ais || []);
@@ -36,14 +36,14 @@ export const apiAiUpload = async (file) => {
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 };
-export const apiExternalMove = (gid, aid) =>
-  req(`/api/games/${gid}/ai-external-move`, json({ aid }));
+export const apiExternalMove = (gid, aid, lim) =>
+  req(`/api/games/${gid}/ai-external-move`, json({ aid, timeout: lim.timeout, memory_mb: lim.memoryMb }));
 export const apiMapPreview = (n, m, seed) =>
   req('/api/map/preview', json({ n, m, seed }));
-export const apiAiGoals = (aid, { n, m, deads, sands }) =>
-  req('/api/ai/goals', json({ aid, n, m, deads, sands })).then((j) => ({ goal_A: j.goal_A, goal_B: j.goal_B }));
-export const apiAiSide = (aid, { n, m, deads, sands, goal_A, goal_B }) =>
-  req('/api/ai/side', json({ aid, n, m, deads, sands, goal_A, goal_B })).then((j) => j.side);
+export const apiAiGoals = (aid, { n, m, deads, sands }, lim) =>
+  req('/api/ai/goals', json({ aid, n, m, deads, sands, timeout: lim.timeout, memory_mb: lim.memoryMb })).then((j) => ({ goal_A: j.goal_A, goal_B: j.goal_B }));
+export const apiAiSide = (aid, { n, m, deads, sands, goal_A, goal_B }, lim) =>
+  req('/api/ai/side', json({ aid, n, m, deads, sands, goal_A, goal_B, timeout: lim.timeout, memory_mb: lim.memoryMb })).then((j) => j.side);
 
 // —— 单面墙阻断边（镜像 engine.wall_edges），用于悬停预览的本地合法性判断 ——
 function edgesOf(w) {
