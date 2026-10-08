@@ -113,7 +113,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   const [phase, setPhase] = useState('A'); // 当前正在选 A 还是 B
   const [side, setSide] = useState(null); // picker 选 'first' | 'second'
   const [skillDefs, setSkillDefs] = useState(FALLBACK_SKILLS);
-  const [skillPicks, setSkillPicks] = useState([[], []]); // 每位参与者的技能卡（AI 席位开局时随机）
+  const [skillPicks, setSkillPicks] = useState([[], []]); // 人类席位的技能卡（AI 席位开局时由各自 AI 自选）
 
   useEffect(() => {
     apiSkills().then(setSkillDefs).catch(() => {});
@@ -135,9 +135,10 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
   const k = Math.floor(fm / 2);
   const kk = skillK(fn, fm); // 本局技能卡数 F(n,m)
   const goalsReady = goalA.length === k && goalB.length === k;
-  const skillsReady =
-    skillPicks[0].length === kk && skillPicks[1].length === kk &&
-    [...skillPicks[0], ...skillPicks[1]].every((s) => s in skillDefs);
+  // 人类席位须选满有效牌；AI 席位开局时由 AI 自选，不在此校验
+  const skillsReady = [0, 1].every((i) =>
+    ptypes[i] === 'ai' ||
+    (skillPicks[i].length === kk && skillPicks[i].every((s) => s in skillDefs)));
 
   function setPick(i, arr) {
     setSkillPicks(skillPicks.map((v, j) => (j === i ? arr : v)));
@@ -226,7 +227,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
       goal_A: goalA, goal_B: goalB,
       participants: [{ name: names[0], type: ptypes[0] }, { name: names[1], type: ptypes[1] }],
       seatOf, chooser, side,
-      // 人类席位用所选牌，AI 席位传 null（由后端随机）
+      // 人类席位用所选牌，AI 席位传 null（开局时跑各自选牌容器）
       skillPicks: [ptypes[0] === 'human' ? skillPicks[0] : null,
                    ptypes[1] === 'human' ? skillPicks[1] : null],
       // 每席 AI 来源（后端 aid，含内置与上传）
@@ -354,9 +355,9 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
           )}
           <div className="rowbtns">
             <button className="btn primary" disabled={!side} onClick={() => {
-              // AI 席位先随机一版预览（可重随），人类席位保留已选
+              // 人类席位保留已选；AI 席位开局时由各自 AI 自选，此处置空
               setSkillPicks([0, 1].map((i) => (
-                ptypes[i] === 'ai' ? randomPicks() : (skillPicks[i].length === kk ? skillPicks[i] : [])
+                ptypes[i] === 'ai' ? [] : (skillPicks[i].length === kk ? skillPicks[i] : [])
               )));
               setStep(3);
             }}>
@@ -373,7 +374,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
           {terrain && <MapPreview n={terrain.n} m={terrain.m} deads={terrain.deads} sands={terrain.sands} />}
           {[0, 1].map((i) => (
             <div className="pseat" key={i} style={{ marginBottom: 10 }}>
-              <b>{names[i]}（{ptypes[i] === 'human' ? '人类自选' : 'AI 随机'}）：{ptypes[i] === 'human' ? `${skillPicks[i].length}/${kk}` : `开局随机 ${kk} 张`}</b>
+              <b>{names[i]}（{ptypes[i] === 'human' ? '人类自选' : 'AI 自选'}）：{ptypes[i] === 'human' ? `${skillPicks[i].length}/${kk}` : `开局由 AI 自选 ${kk} 张`}</b>
               {ptypes[i] === 'human' ? (
                 <>
                   {Object.entries(skillDefs).map(([id, d]) => {
@@ -395,7 +396,7 @@ export default function SetupWizard({ onCreate, onCancel, hasGame }) {
                   </div>
                 </>
               ) : (
-                <p className="muted small">AI 席位开局时由后端随机选牌，赛前不向人类展示牌面（同机双人对战除外，双方皆为人类时互可见）。</p>
+                <p className="muted small">AI 席位开局时由各自 AI 按地形选牌，赛前不向人类展示牌面（同机双人对战除外，双方皆为人类时互可见）。</p>
               )}
             </div>
           ))}
