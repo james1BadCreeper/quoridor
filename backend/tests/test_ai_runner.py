@@ -216,3 +216,97 @@ def test_ai_limits_rejected_before_build():
     assert r.status_code == 400 and "超时" in r.text
     r = c.post("/api/ai/side", json={"aid": "builtin-random", "memory_mb": 4096})
     assert r.status_code == 400 and "内存" in r.text
+
+
+def test_batch_validation_no_docker():
+    """批量参数校验（无需 docker）。"""
+    c = TestClient(app)
+    base = {"white": "random", "black": "random"}
+    assert c.post("/api/ai/batch", json={**base, "games": 0}).status_code == 400
+    assert c.post("/api/ai/batch", json={**base, "games": 1001}).status_code == 400
+    assert c.post("/api/ai/batch", json={**base, "max_parallel": 0}).status_code == 400
+    assert c.post("/api/ai/batch", json={**base, "max_parallel": 17}).status_code == 400
+    assert c.post("/api/ai/batch", json={**base, "n": 5}).status_code == 400
+    assert c.get("/api/ai/batch/nope").status_code == 404
+
+
+def test_rebuild_batch_game_no_docker():
+    """决策日志重放（无需 docker，手工注入一局）。"""
+    from app import engine as E
+    st0 = E.new_game(n=9, m=9, seed=11, goal_A=[0, 1, 2, 3], goal_B=[5, 6, 7, 8])
+    mv = [list(x) for x in E.legal_pawn_moves(st0, 0)][0]
+    ai_runner.JOBS["t-rebuild"] = {
+        "games": 1, "white": "random", "black": "random",
+        "results": [{"index": 0, "winner_seat": None, "win_reason": None, "plies": 1}],
+        "tables": [{"n": 9, "m": 9, "seed": 11,
+                    "goal_A": [0, 1, 2, 3], "goal_B": [5, 6, 7, 8],
+                    "skills": [["phase_walk", "phase_walk"], ["phase_walk", "phase_walk"]],
+                    "log": [{"actions": [{"type": "move", "to": mv}]}],
+                    "sides": ["random", "random"]}],
+    }
+    try:
+        g = ai_runner.rebuild_batch_game("t-rebuild", 0)
+    finally:
+        del ai_runner.JOBS["t-rebuild"]
+    assert len(g["states"]) == 2
+    assert [h["type"] for h in g["states"][0]["history"]] == ["select_skills", "select_skills"]
+    assert g["states"][1]["pawns"][0] == mv
+    assert len(g["states"][1]["history"]) == 3
+
+
+@needs_docker
+def test_batch_end_to_end():
+    """批量 3 局小步数端到端：进度→完赛→单局重建一致。"""
+    import time
+    c = TestClient(app)
+    r = c.post("/api/ai/batch", json={"white": "builtin-random", "black": "builtin-random",
+                                      "n": 9, "m": 9, "seed": 5, "games": 3,
+                                      "max_parallel": 2, "max_plies": 6, "timeout": 10})
+    assert r.status_code == 200, r.text
+    jid = r.json()["job_id"]
+    s = {}
+    for _ in range(180):
+        s = c.get(f"/api/ai/batch/{jid}").json()
+        assert s["done"] <= s["total"] == 3
+        assert isinstance(s["running"], dict)
+        if s["finished"]:
+            break
+        time.sleep(1)
+    assert s["finished"] and s["done"] == 3 and len(s["results"]) == 3
+    row0 = s["results"][0]
+    g = c.get(f"/api/ai/batch/{jid}/games/0")
+    assert g.status_code == 200, g.text
+    states = g.json()["states"]
+    assert states[-1]["winner"] == row0["winner_seat"]
+    assert [h["type"] for h in states[0]["history"]] == ["select_skills", "select_skills"]
+    assert len(states[-1]["history"]) >= len(states[0]["history"])
+    assert c.get(f"/api/ai/batch/{jid}/games/9").status_code in (400, 404)
+
+
+@needs_docker
+def test_batch_download_zip():
+    """批量下载 zip：完赛后含 summary + 每局棋谱；未完赛 400。"""
+    import time
+    import zipfile
+    c = TestClient(app)
+    r = c.post("/api/ai/batch", json={"white": "builtin-random", "black": "builtin-random",
+                                      "n": 9, "m": 9, "seed": 5, "games": 2,
+                                      "max_parallel": 2, "max_plies": 6, "timeout": 10})
+    jid = r.json()["job_id"]
+    assert c.get(f"/api/ai/batch/{jid}/download").status_code == 400  # 未完赛
+    for _ in range(180):
+        s = c.get(f"/api/ai/batch/{jid}").json()
+        if s["finished"]:
+            break
+        time.sleep(1)
+    assert s["finished"]
+    d = c.get(f"/api/ai/batch/{jid}/download")
+    assert d.status_code == 200
+    z = zipfile.ZipFile(__import__("io").BytesIO(d.content))
+    names = z.namelist()
+    assert "summary.json" in names
+    assert "game_0000.json" in names and "game_0001.json" in names
+    import json as _json
+    g0 = _json.loads(z.read("game_0000.json"))
+    assert len(g0["states"]) > 1 and "meta" in g0
+    assert c.get("/api/ai/batch/nope/download").status_code == 404

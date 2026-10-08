@@ -403,3 +403,15 @@ def test_preview_terrain_matches_final_game():
                         goal_B=[1, 3, 5, 7, 9, 11])
         assert sorted(pv.deads) == sorted(real.deads)
         assert sorted(pv.sands) == sorted(real.sands)
+
+
+def test_to_dict_snapshots_are_isolated():
+    """连续 to_dict 快照互不污染（重放棋谱依赖此隔离性）。"""
+    st = _started()
+    before = st.to_dict()
+    target = legal_pawn_moves(st, 0)[0]
+    apply_pawn_move(st, list(target))
+    assert before["pawns"] != st.pawns
+    assert len(before["history"]) + 1 == len(st.to_dict()["history"])
+    before["hands"][0]["x"] = 1  # 快照写操作不得污染引擎内状态
+    assert "x" not in st.hands[0]

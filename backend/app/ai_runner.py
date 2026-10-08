@@ -9,8 +9,10 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import threading
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import engine
@@ -36,6 +38,12 @@ RUN_CONTAINER_TIMEOUT = 30  # 单步容器运行超时上限（秒）
 DEFAULT_MEMORY_MB = 256  # 容器内存默认（MiB）
 MIN_MEMORY_MB = 64  # 容器内存下限（MiB）
 MAX_MEMORY_MB = 2048  # 容器内存上限（MiB）
+MAX_BATCH_GAMES = 1000  # 批量对战局数上限
+MAX_BATCH_PARALLEL = 16  # 批量对战并行数上限
+MAX_JOBS = 10  # 内存中保留的批量任务数（超出的最旧任务被清理）
+
+_BUILD_LOCK = threading.Lock()  # 同镜像并发构建加锁（日常运行 inspect 不走锁）
+JOBS: dict[str, dict] = {}  # job_id → 批量任务（含 threading.Lock）
 
 
 class AIError(ValueError):
@@ -154,13 +162,22 @@ def ensure_builtin(aid: str) -> None:
         built_digest = json.loads(meta_path.read_text(encoding="utf-8")).get("digest")
     except (OSError, ValueError):
         built_digest = None
-    meta_path.write_text(
-        json.dumps({"aid": aid, "name": name, "builtin": True, "digest": digest}, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    # 源码变化或镜像缺失时重编
-    if built_digest != digest or not image_built(aid):
+    # 常见路径：已是最新构建，直接返回（无锁，不阻塞批量并行每步的 inspect）
+    if built_digest == digest and image_built(aid):
+        return
+    with _BUILD_LOCK:
+        # 锁内复查：等锁期间另一线程可能已构建好
+        try:
+            cur = json.loads(meta_path.read_text(encoding="utf-8")).get("digest")
+        except (OSError, ValueError):
+            cur = None
+        if cur == digest and image_built(aid):
+            return
         build_ai(aid)
+        meta_path.write_text(
+            json.dumps({"aid": aid, "name": name, "builtin": True, "digest": digest}, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
 def ensure_image(aid: str) -> None:
@@ -253,7 +270,7 @@ def select_for(side: str, st: engine.GameState, timeout: float,
 
 
 def _step_side(side: str, st: engine.GameState, timeout: float,
-               memory_mb: int = DEFAULT_MEMORY_MB) -> dict:
+               memory_mb: int = DEFAULT_MEMORY_MB, log: list | None = None) -> dict:
     """某席位行动一轮并落到引擎；返回 {"skill":..,"actions":[已执行..],"applied":n}。
 
     新协议一次输出覆盖整轮：{"skill":..,"to":..,"actions":[{..},...]}。
@@ -265,6 +282,8 @@ def _step_side(side: str, st: engine.GameState, timeout: float,
         side = RANDOM_SIDE
     me = st.turn
     d = run_ai(side, st.to_ai_dict(), timeout, memory_mb)
+    if log is not None:
+        log.append(json.loads(json.dumps(d)))  # 存档原始决策，供批量棋谱按需重建
     if not isinstance(d, dict):
         raise AIError(f"决策须为 json 对象：{str(d)[:200]}")
     actions = d.get("actions")
@@ -306,18 +325,24 @@ def apply_external_decision(aid: str, st: engine.GameState, timeout: float,
 
 def play_match(white: str, black: str, n: int | None = None, m: int | None = None,
                seed: int | None = None, max_plies: int = 800, timeout: float = 5,
-               memory_mb: int = DEFAULT_MEMORY_MB, chooser: str = "random") -> dict:
+               memory_mb: int = DEFAULT_MEMORY_MB, chooser: str = "random",
+               on_ply=None) -> dict:
     """AI 对战：side 为 "random" 或已编译的 aid；犯规/超时者判负，超步数判平局。
 
     出题流程（与前端向导一致）：chooser（white/black/random 之一表出题方，
     random 即抛硬币）先定 A/B 列集，另一方再选边；出题方为 aid 则跑出题容器，
     选边方为 aid 则跑选边容器，否则引擎随机。
+    seed 为空时现场随机一个并记录，保证结果可复现、可重建。
+    on_ply(plies) 每轮回调一次（批量进度用）；返回含决策日志 log 与双方选牌
+    skills，供批量棋谱按需重建（/match 接口会剥离这两项）。
     """
     import random as _random
     if max_plies <= 0 or max_plies > 3000:
         raise AIError("max_plies 须在 (0,3000] 内")
     if chooser not in ("white", "black", "random"):
         raise AIError("chooser 须为 white/black/random")
+    if seed is None:
+        seed = _random.Random().randint(0, 2 ** 31 - 1)
     rng = _random.Random(seed)
     n = n or rng.randint(9, 15)
     m = m or rng.randint(9, 15)
@@ -347,6 +372,8 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
     st = engine.new_game(n=n, m=m, seed=seed, goal_A=goal_A, goal_B=goal_B)
     # picker 选 first 即坐先手席（seat0），否则坐后手席；sides 即席位顺序
     sides = [picker_id, chooser_id] if picker_side == "first" else [chooser_id, picker_id]
+    log: list = []  # 每轮原始决策（按需重建棋谱用）
+    skills: list = [[], []]
     for pl, side in enumerate(sides):
         if side != "random":
             try:
@@ -357,7 +384,9 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
                 return {"winner": st.winner, "win_reason": st.win_reason, "plies": 0,
                         "sides": sides, "state": st.to_dict()}
         try:
-            engine.select_skills(st, pl, select_for(side, st, timeout, memory_mb))
+            picks = select_for(side, st, timeout, memory_mb)
+            skills[pl] = picks
+            engine.select_skills(st, pl, picks)
         except AIError as e:
             st.winner = 1 - pl
             st.win_reason = f"{'先手' if pl == 0 else '后手'}AI 选牌犯规：{e}"
@@ -367,18 +396,163 @@ def play_match(white: str, black: str, n: int | None = None, m: int | None = Non
     while st.winner is None and plies < max_plies:
         side = sides[st.turn]
         try:
-            plies += _step_side(side, st, timeout, memory_mb)["applied"]
+            plies += _step_side(side, st, timeout, memory_mb, log)["applied"]
         except AIError as e:
             st.winner = 1 - st.turn
             st.win_reason = f"{'先手' if st.turn == 0 else '后手'}AI 犯规：{e}"
             break
         plies += 1
+        if on_ply is not None:
+            on_ply(plies)
     if st.winner is None:
         st.winner = -1  # 超出步数上限判平局
         st.win_reason = f"达到步数上限（{max_plies}），判平局"
     return {"winner": st.winner, "win_reason": st.win_reason, "plies": plies,
             "sides": sides, "chooser": chooser_side, "picker_side": picker_side,
-            "goal_A": goal_A, "goal_B": goal_B, "state": st.to_dict()}
+            "goal_A": goal_A, "goal_B": goal_B, "state": st.to_dict(),
+            "n": n, "m": m, "seed": seed, "skills": skills, "log": log}
+
+
+def start_batch(white: str, black: str, n: int | None, m: int | None, seed: int | None,
+                games: int, max_parallel: int, max_plies: int = 800,
+                timeout: float = 5, memory_mb: int = DEFAULT_MEMORY_MB,
+                chooser: str = "random") -> str:
+    """批量对战：N 局（seed=base+i，每局独立出题/选边/选牌），后台线程池跑。
+
+    立即返回 job_id；进度与结果轮询 get_batch；单局棋谱按需 rebuild_batch_game。
+    每局只存决策日志（约数十 KB），1000 局常驻内存可控。
+    """
+    import random as _random
+    if not 1 <= games <= MAX_BATCH_GAMES:
+        raise AIError(f"对局数须在 [1,{MAX_BATCH_GAMES}] 内")
+    if not 1 <= max_parallel <= MAX_BATCH_PARALLEL:
+        raise AIError(f"并行数须在 [1,{MAX_BATCH_PARALLEL}] 内")
+    if n is not None and not 9 <= n <= 15:
+        raise AIError("n 必须在 [9,15] 内")
+    if m is not None and not 9 <= m <= 15:
+        raise AIError("m 必须在 [9,15] 内")
+    base = seed if seed is not None else _random.Random().randint(0, 2 ** 31 - 1)
+    job_id = uuid.uuid4().hex[:8]
+    JOBS[job_id] = {
+        "job_id": job_id, "white": white, "black": black, "n": n, "m": m,
+        "base_seed": base, "games": games, "max_parallel": max_parallel,
+        "max_plies": max_plies, "timeout": timeout, "memory_mb": memory_mb,
+        "chooser": chooser, "total": games, "done": 0, "finished": False,
+        "running": {}, "results": [], "tables": [None] * games,
+        "lock": threading.Lock(),
+    }
+    while len(JOBS) > MAX_JOBS:  # 只保留最近的任务
+        oldest = next(k for k in JOBS if k != job_id)
+        del JOBS[oldest]
+    threading.Thread(target=_run_batch, args=(job_id,), daemon=True).start()
+    return job_id
+
+
+def _run_batch(job_id: str) -> None:
+    job = JOBS[job_id]
+    try:
+        with ThreadPoolExecutor(max_workers=job["max_parallel"]) as ex:
+            list(ex.map(lambda i: _batch_one(job_id, i), range(job["games"])))
+    finally:
+        with job["lock"]:
+            job["finished"] = True
+
+
+def _batch_one(job_id: str, i: int) -> None:
+    job = JOBS[job_id]
+    gs = job["base_seed"] + i
+    with job["lock"]:
+        job["running"][i] = 0
+
+    def on_ply(p: int) -> None:
+        with job["lock"]:
+            job["running"][i] = p
+
+    try:
+        r = play_match(job["white"], job["black"], job["n"], job["m"], gs,
+                       job["max_plies"], job["timeout"], job["memory_mb"],
+                       job["chooser"], on_ply)
+        w = r["winner"]
+        row = {"index": i, "seed": gs, "white": job["white"], "black": job["black"],
+               "first": r["sides"][0], "second": r["sides"][1],
+               "winner_seat": w, "winner_aid": r["sides"][w] if w in (0, 1) else None,
+               "win_reason": r["win_reason"], "plies": r["plies"]}
+        table = {"n": r["n"], "m": r["m"], "seed": gs,
+                 "goal_A": r["goal_A"], "goal_B": r["goal_B"],
+                 "skills": r["skills"], "log": r["log"], "sides": r["sides"]}
+    except AIError as e:
+        row = {"index": i, "seed": gs, "white": job["white"], "black": job["black"],
+               "first": None, "second": None,
+               "winner_seat": None, "winner_aid": None,
+               "win_reason": f"开局失败：{e}", "plies": 0}
+        table = None
+    except Exception as e:  # 兜底：任何意外都不卡住整批任务
+        row = {"index": i, "seed": gs, "white": job["white"], "black": job["black"],
+               "first": None, "second": None,
+               "winner_seat": None, "winner_aid": None,
+               "win_reason": f"内部错误：{type(e).__name__}: {e}", "plies": 0}
+        table = None
+    with job["lock"]:
+        job["running"].pop(i, None)
+        job["results"].append(row)
+        job["tables"][i] = table
+        job["done"] += 1
+
+
+def get_batch(job_id: str) -> dict:
+    """批量任务状态（轮询用）：完成数、进行中各局步数、已完赛轻量结果。"""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise AIError("批量任务不存在（可能已被清理或服务重启）")
+    with job["lock"]:
+        return {"job_id": job_id, "white": job["white"], "black": job["black"],
+                "base_seed": job["base_seed"], "total": job["total"],
+                "done": job["done"], "finished": job["finished"],
+                "running": dict(job["running"]),
+                "results": sorted(job["results"], key=lambda r: r["index"])}
+
+
+def rebuild_batch_game(job_id: str, index: int) -> dict:
+    """按决策日志重放单局，返回逐轮棋谱 states（与前端 state 格式一致）+ meta。"""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise AIError("批量任务不存在（可能已被清理或服务重启）")
+    if not 0 <= index < job["games"]:
+        raise AIError(f"局号须在 [0,{job['games']}) 内")
+    g = job["tables"][index]
+    if g is None:
+        raise AIError("该局尚未结束或开局失败，无棋谱")
+    st = engine.new_game(n=g["n"], m=g["m"], seed=g["seed"],
+                         goal_A=g["goal_A"], goal_B=g["goal_B"])
+    engine.select_skills(st, 0, g["skills"][0])
+    engine.select_skills(st, 1, g["skills"][1])
+    states = [st.to_dict()]
+    for d in g["log"]:
+        try:
+            if "skill" in d:
+                engine.play_skill(st, d["skill"], d.get("to"))
+            me = st.turn
+            for a in d.get("actions") or []:
+                if st.winner is not None or st.turn != me:
+                    break  # 与 _step_side 一致：轮次结束则剩余作废
+                if a.get("type") == "move":
+                    engine.apply_pawn_move(st, a["to"])
+                elif a.get("type") == "wall":
+                    engine.apply_wall(st, Wall.from_dict(a["wall"]))
+        except (ValueError, KeyError, TypeError):
+            break  # 该决策在原局即犯规，棋谱止步于此前缀
+        states.append(st.to_dict())
+    row = next((r for r in job["results"] if r["index"] == index), {})
+    if st.winner is None and row.get("winner_seat") in (0, 1, -1):
+        # 原局终局标记（犯规判负/步数判平）重放无法产生，从记录补上
+        st.winner = row["winner_seat"]
+        st.win_reason = row.get("win_reason")
+        states[-1] = st.to_dict()
+    return {"states": states,
+            "meta": {"white": job["white"], "black": job["black"],
+                     "first": g["sides"][0], "second": g["sides"][1],
+                     "winner_seat": row.get("winner_seat"),
+                     "win_reason": row.get("win_reason"), "plies": row.get("plies")}}
 
 
 def list_ais() -> list[dict]:

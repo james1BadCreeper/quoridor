@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import BatchPanel from './components/BatchPanel.jsx';
 import Board from './components/Board.jsx';
 import SetupWizard from './components/SetupWizard.jsx';
 import {
-  apiExternalMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall,
+  apiAiBatchGame, apiExternalMove, apiImport, apiLegal, apiMovePawn, apiNew, apiPlaceWall,
   apiSkillAiSelect, apiSkillPlay, apiSkillSelect, apiSkills,
   buildReplay, parseReplay,
   sandLocalLegal, wallLocalLegal,
@@ -93,8 +94,55 @@ export default function App() {
     refreshLegal(gidRef.current, st);
   }
 
-  async function createGame(cfg) {
+  // 批量棋谱查看：只读回放（gid 置空 → live 为假，全部行动按钮自动禁用）
+  const [batchOpen, setBatchOpen] = useState(false); // 批量面板
+  const [resumeJob, setResumeJob] = useState(null); // 预览返回时恢复的 job
+  const [batchView, setBatchView] = useState(null); // {jobId, index, results}
+
+  function loadBatchStates(jobId, index, states, meta, results) {
+    if (!states?.length) return;
+    setAutoAI(false); setBusy(false);
+    setGid(null);
+    setSeatNames([meta.first ?? '先手', meta.second ?? '后手']);
+    setSeatTypes(['ai', 'ai']);
+    setSeatAIs([meta.first ?? 'builtin-random', meta.second ?? 'builtin-random']);
+    setRedSeat(0);
+    setSnaps(states);
+    setStep(0);
+    setState(states[0]);
+    setMode('move');
+    setSandMode(false);
+    setGhost(null);
+    setLegal({ moves: [], phased: false });
+    setWizardOpen(false);
+    setBatchOpen(false);
+    setBatchView({ jobId, index, results });
+  }
+
+  async function gotoBatchGame(jobId, ni, results) {
+    if (ni < 0 || ni >= results.length || busy) return;
     setBusy(true);
+    try {
+      const g = await apiAiBatchGame(jobId, ni);
+      loadBatchStates(jobId, ni, g.states, g.meta, results);
+    } catch (e) { alert(`载入棋谱失败：${e.message}`); } finally { setBusy(false); }
+  }
+
+  function stepBatchGame(d) {
+    const bv = batchView;
+    if (!bv) return;
+    gotoBatchGame(bv.jobId, bv.index + d, bv.results);
+  }
+
+  function backToBatch() {
+    // 返回批量结果：面板按 jobId 恢复轮询（服务端为准），预览状态清空
+    if (!batchView) return;
+    setResumeJob(batchView.jobId);
+    setBatchView(null);
+    setBatchOpen(true);
+  }
+
+  async function createGame(cfg) {    setBusy(true);
     try {
       const j = await apiNew({ n: cfg.n, m: cfg.m, seed: cfg.seed, goal_A: cfg.goal_A, goal_B: cfg.goal_B });
       const names = [cfg.participants[cfg.seatOf[0]].name, cfg.participants[cfg.seatOf[1]].name];
@@ -252,16 +300,22 @@ export default function App() {
         <div className="brand"><span className="logo">♞</span> Quoridor 改版</div>
         <div className="topactions">
           <button className="btn ghost" onClick={() => setWizardOpen(true)}>新对局</button>
+          <button className="btn ghost" onClick={() => { setResumeJob(null); setBatchOpen(true); }}>批量对战</button>
           <button className="btn ghost" onClick={exportKifu} disabled={!state}>导出棋谱</button>
           <label className="btn ghost filebtn">导入/回放<input type="file" accept=".json" onChange={importKifu} hidden /></label>
         </div>
       </header>
 
-      {wizardOpen && (
+      {wizardOpen && !batchOpen && (
         <SetupWizard onCreate={createGame} onCancel={() => setWizardOpen(false)} hasGame={!!state} />
       )}
 
-      {shown && !wizardOpen && (
+      {batchOpen && (
+        <BatchPanel key={resumeJob ?? 'new'} initialJob={resumeJob}
+          onView={loadBatchStates} onClose={() => setBatchOpen(false)} />
+      )}
+
+      {shown && !wizardOpen && !batchOpen && (
         <div className="main">
           <section className="card boardcard">
             <div className="statusbar">
@@ -270,8 +324,25 @@ export default function App() {
               </span>
               {shown.bonus_moves > 0 && <span className="pill warn">流沙：同一人继续行动</span>}
               {isReplay && <span className="pill">回放中 {step + 1}/{snaps.length}</span>}
+              {batchView && (
+                <>
+                  <button className="btn ghost mini" onClick={backToBatch}>← 返回批量</button>
+                  <button className="btn ghost mini" disabled={batchView.index <= 0 || busy}
+                    onClick={() => stepBatchGame(-1)}>上一局</button>
+                  <select value={batchView.index} disabled={busy}
+                    onChange={(e) => gotoBatchGame(batchView.jobId, Number(e.target.value), batchView.results)}>
+                    {batchView.results.map((r) => (
+                      <option key={r.index} value={r.index}>
+                        #{r.index + 1} {r.winner_aid ?? (r.winner_seat === -1 ? '平局' : '异常')}
+                      </option>
+                    ))}
+                  </select>
+                  <button className="btn ghost mini" disabled={batchView.index >= batchView.results.length - 1 || busy}
+                    onClick={() => stepBatchGame(1)}>下一局</button>
+                </>
+              )}
               {shown.winner != null && (
-                <span className="pill win">胜者：{seatNames[shown.winner]}（{shown.win_reason}）</span>
+                <span className="pill win">{shown.winner === -1 ? `平局（${shown.win_reason}）` : `胜者：${seatNames[shown.winner]}（${shown.win_reason}）`}</span>
               )}
             </div>
             <div className="wallsline">
@@ -418,7 +489,7 @@ export default function App() {
         </div>
       )}
 
-      {!shown && !wizardOpen && <p className="muted">点击「新对局」开始。</p>}
+      {!shown && !wizardOpen && !batchOpen && <p className="muted">点击「新对局」开始。</p>}
     </div>
   );
 }

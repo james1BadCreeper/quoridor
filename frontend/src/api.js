@@ -40,6 +40,10 @@ export const apiExternalMove = (gid, aid, lim) =>
   req(`/api/games/${gid}/ai-external-move`, json({ aid, timeout: lim.timeout, memory_mb: lim.memoryMb }));
 export const apiMapPreview = (n, m, seed) =>
   req('/api/map/preview', json({ n, m, seed }));
+export const apiAiBatchStart = (cfg) =>
+  req('/api/ai/batch', json(cfg)).then((j) => j.job_id);
+export const apiAiBatchStatus = (jobId) => req(`/api/ai/batch/${jobId}`);
+export const apiAiBatchGame = (jobId, index) => req(`/api/ai/batch/${jobId}/games/${index}`);
 export const apiAiGoals = (aid, { n, m, deads, sands }, lim) =>
   req('/api/ai/goals', json({ aid, n, m, deads, sands, timeout: lim.timeout, memory_mb: lim.memoryMb })).then((j) => ({ goal_A: j.goal_A, goal_B: j.goal_B }));
 export const apiAiSide = (aid, { n, m, deads, sands, goal_A, goal_B }, lim) =>

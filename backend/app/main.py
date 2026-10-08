@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import uuid
+import zipfile
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from . import ai_runner
 from .ai_runner import AIError
@@ -24,6 +29,7 @@ from .engine import (
 from .models import (
     AIGoalsRequest,
     AISideRequest,
+    BatchRequest,
     ExternalMoveRequest,
     MapPreviewRequest,
     MatchRequest,
@@ -212,11 +218,72 @@ def post_external_move(gid: str, req: ExternalMoveRequest) -> dict:
 def run_match(req: MatchRequest) -> dict:
     """AI 对战：出题方（chooser）定 A/B 列集，另一方选边；犯规/超时者判负，超步数判平局。"""
     try:
-        return ai_runner.play_match(req.white, req.black, req.n, req.m,
-                                    req.seed, req.max_plies, req.timeout,
-                                    req.memory_mb, req.chooser)
+        r = ai_runner.play_match(req.white, req.black, req.n, req.m,
+                                 req.seed, req.max_plies, req.timeout,
+                                 req.memory_mb, req.chooser)
     except AIError as e:
         raise HTTPException(400, str(e))
+    r.pop("log", None)  # 决策日志只供批量重建，单局对战不返回
+    r.pop("skills", None)
+    return r
+
+
+@app.post("/api/ai/batch")
+def start_batch(req: BatchRequest) -> dict:
+    """批量对战：后台并行跑 N 局（seed=base+i，每局独立出题/选边/选牌），立即返回 job_id 轮询。"""
+    try:
+        job_id = ai_runner.start_batch(req.white, req.black, req.n, req.m, req.seed,
+                                       req.games, req.max_parallel, req.max_plies,
+                                       req.timeout, req.memory_mb, req.chooser)
+    except AIError as e:
+        raise HTTPException(400, str(e))
+    return {"job_id": job_id}
+
+
+@app.get("/api/ai/batch/{job_id}")
+def batch_status(job_id: str) -> dict:
+    """批量进度：完成数、进行中各局步数、已完赛轻量结果。"""
+    try:
+        return ai_runner.get_batch(job_id)
+    except AIError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/ai/batch/{job_id}/games/{index}")
+def batch_game(job_id: str, index: int) -> dict:
+    """按决策日志重放单局，返回逐轮棋谱 states + meta（前端直接载入回放）。"""
+    try:
+        return ai_runner.rebuild_batch_game(job_id, index)
+    except AIError as e:
+        raise HTTPException(404 if "不存在" in str(e) else 400, str(e))
+
+
+@app.get("/api/ai/batch/{job_id}/download")
+def batch_download(job_id: str, background: BackgroundTasks) -> FileResponse:
+    """打包下载全部棋谱 zip（每局 game_XXXX.json + summary.json，完赛后可用）。"""
+    try:
+        job = ai_runner.get_batch(job_id)
+    except AIError as e:
+        raise HTTPException(404, str(e))
+    if not job["finished"]:
+        raise HTTPException(400, "批量尚未完赛")
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp.close()
+    try:
+        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("summary.json", json.dumps(
+                {"job_id": job_id, "white": job["white"], "black": job["black"],
+                 "base_seed": job["base_seed"], "total": job["total"],
+                 "results": job["results"]}, ensure_ascii=False))
+            for r in job["results"]:
+                g = ai_runner.rebuild_batch_game(job_id, r["index"])
+                z.writestr(f"game_{r['index']:04d}.json",
+                           json.dumps(g, ensure_ascii=False))
+    except AIError as e:
+        os.unlink(tmp.name)
+        raise HTTPException(400, str(e))
+    background.add_task(os.unlink, tmp.name)
+    return FileResponse(tmp.name, filename=f"batch_{job_id}.zip")
 
 
 @app.post("/api/map/preview")

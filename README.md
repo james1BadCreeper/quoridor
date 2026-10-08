@@ -94,6 +94,14 @@ curl -X POST http://127.0.0.1:8000/api/games/{gid}/ai-external-move \
 # 自动对战（双方各为 "random" 或 aid，直至终局/犯规/超步数）
 curl -X POST http://127.0.0.1:8000/api/ai/match \
   -H 'Content-Type: application/json' -d '{"white":"<aid>","black":"random","seed":7}'
+# 批量对战（后台并行 N 局，seed=base+i，每局独立出题/选边/选牌；立即返回 job_id 轮询）
+# 前端顶部“批量对战”进独立面板：配对局数/并行数，实时看进度与进行中步数，完赛看胜率统计、
+# 逐局查看棋谱（预览内可返回/切换上下局）、打包下载全部棋谱 zip
+curl -X POST http://127.0.0.1:8000/api/ai/batch \
+  -H 'Content-Type: application/json' -d '{"white":"<aid>","black":"<aid>","games":20,"max_parallel":4}'
+curl http://127.0.0.1:8000/api/ai/batch/{job_id}          # 进度：完成数、进行中各局步数、已完赛结果
+curl http://127.0.0.1:8000/api/ai/batch/{job_id}/games/0  # 单局棋谱（按决策日志重放，前端可直接载入回放）
+curl -OJ http://127.0.0.1:8000/api/ai/batch/{job_id}/download  # 打包下载全部棋谱 zip
 ```
 
 犯规（非法决策）、超时者判负；超出步数上限判平局（`winner=-1`）。
